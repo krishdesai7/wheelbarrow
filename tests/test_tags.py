@@ -13,7 +13,7 @@ def linux(arch: str, libc: str = "glibc") -> BinaryInfo:
     return BinaryInfo(path=Path(), format="elf", os="linux", arch=arch, libc=libc)
 
 
-def macos(arch: str, minos=None, slices=()) -> BinaryInfo:
+def macos(arch: str, minos: tuple[int, int] | None = None, slices=()) -> BinaryInfo:
     return BinaryInfo(
         path=Path(),
         format="macho",
@@ -38,50 +38,50 @@ class TestLinux:
             ("riscv64", "manylinux_2_31_riscv64"),
         ],
     )
-    def test_glibc_defaults(self, arch, expected):
+    def test_glibc_defaults(self, arch, expected) -> None:
         assert platform_tag(linux(arch)) == expected
 
-    def test_musl_uses_musllinux(self):
+    def test_musl_uses_musllinux(self) -> None:
         assert platform_tag(linux("x86_64", "musl")) == "musllinux_1_2_x86_64"
 
-    def test_static_binaries_use_the_manylinux_baseline(self):
+    def test_static_binaries_use_the_manylinux_baseline(self) -> None:
         # A static binary runs anywhere, so the lowest baseline is honest.
         assert platform_tag(linux("x86_64", "static")) == "manylinux_2_17_x86_64"
 
     @pytest.mark.parametrize("spelling", ["2.28", "2_28"])
-    def test_glibc_override_accepts_both_spellings(self, spelling):
+    def test_glibc_override_accepts_both_spellings(self, spelling) -> None:
         tag = platform_tag(linux("x86_64"), glibc_version=spelling)
         assert tag == "manylinux_2_28_x86_64"
 
-    def test_unknown_arch_is_rejected(self):
+    def test_unknown_arch_is_rejected(self) -> None:
         with pytest.raises(InspectionError, match="no manylinux baseline"):
             platform_tag(linux("sparc64"))
 
 
 class TestMacos:
-    def test_uses_recorded_minimum(self):
+    def test_uses_recorded_minimum(self) -> None:
         assert platform_tag(macos("arm64", (12, 3))) == "macosx_12_0_arm64"
 
-    def test_minor_version_is_dropped_from_macos_11_onwards(self):
+    def test_minor_version_is_dropped_from_macos_11_onwards(self) -> None:
         # PEP 600-era convention: macOS 11+ tags always carry a 0 minor.
         assert platform_tag(macos("arm64", (14, 5))) == "macosx_14_0_arm64"
 
-    def test_legacy_minor_version_is_preserved(self):
+    def test_legacy_minor_version_is_preserved(self) -> None:
         assert platform_tag(macos("x86_64", (10, 12))) == "macosx_10_12_x86_64"
 
-    def test_defaults_per_architecture(self):
+    def test_defaults_per_architecture(self) -> None:
         assert platform_tag(macos("arm64")) == "macosx_11_0_arm64"
         assert platform_tag(macos("x86_64")) == "macosx_10_12_x86_64"
 
-    def test_universal_binary_is_tagged_universal2(self):
+    def test_universal_binary_is_tagged_universal2(self) -> None:
         info = macos("x86_64", (11, 0), slices=("x86_64", "arm64"))
         assert platform_tag(info) == "macosx_11_0_universal2"
 
-    def test_universal2_never_goes_below_11(self):
+    def test_universal2_never_goes_below_11(self) -> None:
         info = macos("x86_64", (10, 12), slices=("x86_64", "arm64"))
         assert platform_tag(info) == "macosx_11_0_universal2"
 
-    def test_explicit_override_wins(self):
+    def test_explicit_override_wins(self) -> None:
         tag = platform_tag(macos("arm64", (14, 0)), macos_min=(13, 0))
         assert tag == "macosx_13_0_arm64"
 
@@ -91,10 +91,10 @@ class TestWindows:
         ("arch", "expected"),
         [("x86_64", "win_amd64"), ("i686", "win32"), ("arm64", "win_arm64")],
     )
-    def test_tags(self, arch, expected):
+    def test_tags(self, arch, expected) -> None:
         assert platform_tag(windows(arch)) == expected
 
 
-def test_full_tag_composition():
+def test_full_tag_composition() -> None:
     assert full_tag("win_amd64") == "py3-none-win_amd64"
     assert full_tag("win_amd64", python="py38") == "py38-none-win_amd64"

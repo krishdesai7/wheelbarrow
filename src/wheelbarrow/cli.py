@@ -1,7 +1,7 @@
 """Command line interface for wheelbarrow."""
 
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Protocol
 
 import typer
 from rich.console import Console
@@ -30,6 +30,31 @@ def _fail(message: str) -> typer.Exit:
     return typer.Exit(code=1)
 
 
+class _Helpable(Protocol):
+    """Any context that can render help.
+
+    Structural, because `Context.parent` is typed as click's own Context while
+    typer hands out a subclass of it, and click is vendored inside typer rather
+    than importable in its own right.
+    """
+
+    def get_help(self) -> str: ...
+
+
+def _show_help(ctx: _Helpable) -> None:
+    """Print the help for `ctx`'s command, exactly as `--help` would.
+
+    This mirrors click's own `--help` handler rather than improving on it, so
+    `wheelbarrow help build` and `wheelbarrow build --help` cannot drift apart.
+    Under rich markup mode `get_help` renders straight to stdout and returns an
+    empty string, and echoing that is what yields the trailing blank line
+    `--help` also prints; the return value only carries text in the plain
+    fallback. `typer.echo` rather than the rich console, because help text is
+    full of `[OPTIONS]`-style brackets that the console would read as markup.
+    """
+    typer.echo(ctx.get_help())
+
+
 def _version_callback(value: bool) -> None:
     if value:
         console.print(f"wheelbarrow {__version__}")
@@ -51,7 +76,7 @@ def root(
     """Package prebuilt command line tools as Python wheels."""
 
 
-@app.command("inspect")
+@app.command("inspect", no_args_is_help=True)
 def inspect_command(
     binary: Annotated[Path, typer.Argument(help="Path to the executable to inspect.")],
     glibc: Annotated[
@@ -95,7 +120,7 @@ def _print_info(info: BinaryInfo, tag: str) -> None:
     console.print(table)
 
 
-@app.command("build")
+@app.command("build", no_args_is_help=True)
 def build_command(
     binary: Annotated[Path, typer.Argument(help="Path to the executable to package.")],
     name: Annotated[
@@ -303,7 +328,7 @@ def _parse_macos_min(value: str | None) -> tuple[int, int] | None:
     return major, minor
 
 
-@app.command("publish")
+@app.command("publish", no_args_is_help=True)
 def publish_command(
     wheels: Annotated[list[Path], typer.Argument(help="Wheel files to upload.")],
     index: Annotated[
@@ -372,6 +397,34 @@ def publish_command(
         raise _fail(str(exc)) from exc
 
     console.print("[bold green]published[/]")
+
+
+@app.command("help")
+def help_command(
+    ctx: typer.Context,
+    command: Annotated[
+        str | None,
+        typer.Argument(help="Command to describe. Omitted, describes wheelbarrow."),
+    ] = None,
+) -> None:
+    """Show help for a command, equivalent to `COMMAND --help`."""
+    # ctx is this command's own context; its parent is the top-level group,
+    # which owns both the root help text and the table of subcommands.
+    # Left unannotated: `parent` is typed as click's base Context, not typer's.
+    root_ctx = ctx.parent or ctx
+    if command is None:
+        _show_help(root_ctx)
+        return
+
+    group = root_ctx.command
+    subcommand = group.get_command(root_ctx, command)  # type: ignore[attr-defined]
+    if subcommand is None:
+        known: str = ", ".join(sorted(group.list_commands(root_ctx)))  # type: ignore[attr-defined]
+        raise _fail(f"unknown command {command!r}. Available commands: {known}")
+
+    # Parenting the context to the root keeps the usage line fully qualified,
+    # so it reads `wheelbarrow build ...` rather than just `build ...`.
+    _show_help(typer.Context(subcommand, info_name=command, parent=root_ctx))
 
 
 if __name__ == "__main__":

@@ -225,7 +225,12 @@ wheelbarrow publish WHEELS...
         --token TOKEN / --username NAME
         --dry-run             print the uv command without running it
     -y, --yes                 skip the confirmation prompt
+
+wheelbarrow help [COMMAND]    same as `wheelbarrow COMMAND --help`
 ```
+
+Running a command with no arguments at all prints its help, so `wheelbarrow build`,
+`wheelbarrow help build` and `wheelbarrow build --help` are interchangeable.
 
 ## Notes and limitations
 
@@ -275,6 +280,9 @@ $ uv format --diff
 
 # Lint
 $ uv run ruff check
+
+# Dependency audit
+$ uv audit
 
 # Run tests
 $ uv run pytest -q

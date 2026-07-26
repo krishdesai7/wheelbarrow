@@ -16,10 +16,11 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from wheelbarrow.builder import build_package
-from wheelbarrow.probe import inspect_binary
+from wheelbarrow.builder import BuildResult, build_package
+from wheelbarrow.probe import BinaryInfo, inspect_binary
 from wheelbarrow.scaffold import (
     Launcher,
+    PackageSpec,
     archive_executables,
     make_spec,
     staged_paths,
@@ -33,9 +34,11 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-def build(binary: Path, out: Path, *, keep_project: Path | None = None, **overrides):
-    info = inspect_binary(binary)
-    spec = make_spec(
+def build(
+    binary: Path, out: Path, *, keep_project: Path | None = None, **overrides
+) -> BuildResult:
+    info: BinaryInfo = inspect_binary(binary)
+    spec: PackageSpec = make_spec(
         name=overrides.pop("name", "demo-bin"),
         version=overrides.pop("version", "1.2.3"),
         binary_name=binary.name,
@@ -52,23 +55,25 @@ def entry_mode(info: zipfile.ZipInfo) -> int:
 class TestCrossPlatformBuild:
     """The wheel's tag must follow the binary, not the build machine."""
 
-    def test_linux_binary_gets_a_manylinux_wheel(self, write_binary, tmp_path):
+    def test_linux_binary_gets_a_manylinux_wheel(self, write_binary, tmp_path) -> None:
         binary = write_binary("tool", make_elf(0x3E))
-        result = build(binary, tmp_path / "dist")
+        result: BuildResult = build(binary, tmp_path / "dist")
 
         assert result.tag == "py3-none-manylinux_2_17_x86_64"
         assert result.wheel.name == "demo_bin-1.2.3-py3-none-manylinux_2_17_x86_64.whl"
 
-    def test_aarch64_musl_binary(self, write_binary, tmp_path):
+    def test_aarch64_musl_binary(self, write_binary, tmp_path) -> None:
         from .conftest import MUSL_INTERP
 
         binary = write_binary("tool", make_elf(0xB7, interp=MUSL_INTERP))
-        result = build(binary, tmp_path / "dist")
+        result: BuildResult = build(binary, tmp_path / "dist")
         assert result.tag == "py3-none-musllinux_1_2_aarch64"
 
-    def test_windows_binary_gets_a_win_amd64_wheel(self, write_binary, tmp_path):
+    def test_windows_binary_gets_a_win_amd64_wheel(
+        self, write_binary, tmp_path
+    ) -> None:
         binary = write_binary("tool.exe", make_pe(0x8664))
-        result = build(binary, tmp_path / "dist")
+        result: BuildResult = build(binary, tmp_path / "dist")
 
         assert result.tag == "py3-none-win_amd64"
         assert result.wheel.name.endswith("-py3-none-win_amd64.whl")
@@ -76,7 +81,7 @@ class TestCrossPlatformBuild:
 
 class TestWheelContents:
     @pytest.fixture(params=[Launcher.DIRECT, Launcher.SHIM])
-    def built(self, request, write_binary, tmp_path):
+    def built(self, request, write_binary, tmp_path) -> BuildResult:
         binary = write_binary("tool", make_elf(0x3E))
         return build(
             binary,
@@ -89,7 +94,7 @@ class TestWheelContents:
     def wheel(self, built):
         return built.wheel
 
-    def test_binary_is_stored_executable(self, built):
+    def test_binary_is_stored_executable(self, built) -> None:
         expected = archive_executables(built.spec)
         with zipfile.ZipFile(built.wheel) as zf:
             names = set(zf.namelist())
@@ -97,7 +102,7 @@ class TestWheelContents:
             for path in expected:
                 assert entry_mode(zf.getinfo(path)) == 0o755, path
 
-    def test_other_files_are_not_executable(self, built):
+    def test_other_files_are_not_executable(self, built) -> None:
         executables = archive_executables(built.spec)
         with zipfile.ZipFile(built.wheel) as zf:
             for item in zf.infolist():
@@ -105,7 +110,7 @@ class TestWheelContents:
                     continue
                 assert entry_mode(item) == 0o644, item.filename
 
-    def test_wheel_metadata_declares_the_tag(self, wheel):
+    def test_wheel_metadata_declares_the_tag(self, wheel) -> None:
         with zipfile.ZipFile(wheel) as zf:
             text = zf.read("demo_bin-1.2.3.dist-info/WHEEL").decode()
         assert "Tag: py3-none-manylinux_2_17_x86_64" in text
@@ -113,7 +118,7 @@ class TestWheelContents:
         assert "Root-Is-Purelib: false" in text
         assert text.count("Tag:") == 1
 
-    def test_record_is_complete_and_correct(self, wheel):
+    def test_record_is_complete_and_correct(self, wheel) -> None:
         with zipfile.ZipFile(wheel) as zf:
             record_name = "demo_bin-1.2.3.dist-info/RECORD"
             rows = list(csv.reader(io.StringIO(zf.read(record_name).decode())))
@@ -134,13 +139,13 @@ class TestWheelContents:
             archived = {i.filename for i in zf.infolist() if not i.is_dir()}
             assert archived == listed
 
-    def test_binary_is_not_stored_twice(self, built):
+    def test_binary_is_not_stored_twice(self, built) -> None:
         """The staging layout must not let the binary in as package data too."""
         with zipfile.ZipFile(built.wheel) as zf:
             big = [i for i in zf.infolist() if i.file_size > 1024]
         assert len(big) == len(archive_executables(built.spec))
 
-    def test_no_stray_record_entry_from_the_backend(self, wheel):
+    def test_no_stray_record_entry_from_the_backend(self, wheel) -> None:
         with zipfile.ZipFile(wheel) as zf:
             names = zf.namelist()
         assert names.count("demo_bin-1.2.3.dist-info/RECORD") == 1
@@ -151,7 +156,7 @@ class TestLauncherLayouts:
     def elf(self, write_binary):
         return write_binary("tool", make_elf(0x3E))
 
-    def test_direct_puts_the_binary_in_data_scripts(self, elf, tmp_path):
+    def test_direct_puts_the_binary_in_data_scripts(self, elf, tmp_path) -> None:
         result = build(elf, tmp_path / "dist", aliases=["tool"])
         with zipfile.ZipFile(result.wheel) as zf:
             names = zf.namelist()
@@ -160,12 +165,12 @@ class TestLauncherLayouts:
         # A console script of the same name would clobber the binary.
         assert "demo_bin-1.2.3.dist-info/entry_points.txt" not in names
 
-    def test_direct_names_the_script_after_the_alias(self, elf, tmp_path):
+    def test_direct_names_the_script_after_the_alias(self, elf, tmp_path) -> None:
         result = build(elf, tmp_path / "dist", aliases=["renamed"])
         with zipfile.ZipFile(result.wheel) as zf:
             assert "demo_bin-1.2.3.data/scripts/renamed" in zf.namelist()
 
-    def test_shim_keeps_the_binary_in_the_package(self, elf, tmp_path):
+    def test_shim_keeps_the_binary_in_the_package(self, elf, tmp_path) -> None:
         result = build(elf, tmp_path / "dist", launcher=Launcher.SHIM)
         with zipfile.ZipFile(result.wheel) as zf:
             names = zf.namelist()
@@ -174,7 +179,7 @@ class TestLauncherLayouts:
         assert not any(".data/scripts" in n for n in names)
         assert "tool = demo_bin.__main__:main" in text
 
-    def test_shim_shares_one_copy_across_aliases(self, elf, tmp_path):
+    def test_shim_shares_one_copy_across_aliases(self, elf, tmp_path) -> None:
         result = build(
             elf, tmp_path / "dist", aliases=["tool", "demo"], launcher=Launcher.SHIM
         )
@@ -193,7 +198,7 @@ class TestLauncherLayouts:
 class TestWheelJsonRewrite:
     """uv's non-standard WHEEL.json must not contradict WHEEL after retagging."""
 
-    def test_wheel_json_is_kept_in_step(self, write_binary, tmp_path):
+    def test_wheel_json_is_kept_in_step(self, write_binary, tmp_path) -> None:
         binary = write_binary("tool", make_elf(0x3E))
         result = build(binary, tmp_path / "dist")
 
@@ -232,7 +237,9 @@ class TestWheelJsonRewrite:
 
 
 class TestReproducibility:
-    def test_identical_inputs_produce_identical_wheels(self, write_binary, tmp_path):
+    def test_identical_inputs_produce_identical_wheels(
+        self, write_binary, tmp_path
+    ) -> None:
         binary = write_binary("tool", make_elf(0x3E))
         first = build(binary, tmp_path / "a").wheel.read_bytes()
         second = build(binary, tmp_path / "b").wheel.read_bytes()
@@ -240,7 +247,7 @@ class TestReproducibility:
 
 
 class TestKeepProject:
-    def test_generated_project_can_be_kept(self, write_binary, tmp_path):
+    def test_generated_project_can_be_kept(self, write_binary, tmp_path) -> None:
         binary = write_binary("tool", make_elf(0x3E))
         kept = tmp_path / "kept"
         result = build(binary, tmp_path / "dist", keep_project=kept)
@@ -303,14 +310,14 @@ class TestInstalledWheelRuns:
             executable = target / "greet_bin" / "bin" / "greet"
         return target, executable
 
-    def test_executable_bit_survives_installation(self, installed):
+    def test_executable_bit_survives_installation(self, installed) -> None:
         _, executable = installed
         assert executable.is_file()
         assert stat.S_IMODE(executable.stat().st_mode) & 0o111, (
             "the installer did not preserve the executable bit"
         )
 
-    def test_running_it_directly_works(self, installed):
+    def test_running_it_directly_works(self, installed) -> None:
         _, executable = installed
         completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]
             [str(executable), "world"], capture_output=True, text=True, check=False
@@ -318,7 +325,7 @@ class TestInstalledWheelRuns:
         assert completed.stdout.strip() == "hello world"
         assert completed.returncode == 7, "exit status must propagate"
 
-    def test_python_dash_m_works(self, installed):
+    def test_python_dash_m_works(self, installed) -> None:
         target, _ = installed
         completed = subprocess.run(
             [sys.executable, "-m", "greet_bin", "world"],
@@ -332,7 +339,7 @@ class TestInstalledWheelRuns:
         assert completed.stdout.strip() == "hello world"
         assert completed.returncode == 7, "exit status must propagate"
 
-    def test_binary_path_resolves_to_the_installed_file(self, installed):
+    def test_binary_path_resolves_to_the_installed_file(self, installed) -> None:
         target, executable = installed
         completed = subprocess.run(
             [
