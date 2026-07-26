@@ -1,0 +1,100 @@
+[build-system]
+requires = ["uv_build>=0.11.30,<0.12"]
+build-backend = "uv_build"
+
+
+[project]
+name = "wheelbarrow"
+description = "Convert OS binaries into PyPI-installable python wheels"
+readme = "README.md"
+version = "0.1.0"
+requires-python = ">=3.12"
+authors = [{ name = "Krish Desai", email = "krish@desai.ml" }]
+keywords = []
+license="MIT OR Apache-2.0"
+license-files = ["LICENSE-APACHE", "LICENSE-MIT"]
+classifiers = []
+dependencies = [
+    "typer>=0.27.0",
+]
+
+[project.scripts]
+wheelbarrow = "wheelbarrow.cli:app"
+
+[dependency-groups]
+dev = [
+    "pyrefly>=1.1.1",
+    "pytest>=8.0",
+    "ruff>=0.15.18",
+]
+release = [
+  "rooster==0.1.1",
+]
+
+[project.urls]
+repository = "https://github.com/krishdesai7/wheelbarrow"
+Changelog = "https://github.com/krishdesai7/wheelbarrow/blob/main/CHANGELOG.md"
+Releases = "https://github.com/krishdesai7/wheelbarrow/releases"
+
+
+[tool.uv]
+required-version = ">=0.11.30"
+cache-keys = [
+    { file = "pyproject.toml" },
+]
+
+[tool.uv.dependency-groups]
+release = { requires-python = ">=3.12" }
+
+
+[tool.uv.build-backend]
+editable-profile = "dev"
+module-name = "wheelbarrow"
+
+[tool.rooster]
+changelog-contributors = false
+major-labels = []
+minor-labels = ["breaking"]
+ignore-labels = ["internal", "ci", "testing", "automations"]
+
+[tool.rooster.section-labels]
+"Breaking changes" = ["breaking"]
+"Enhancements" = ["enhancement", "compatibility", "error messages"]
+"Preview features" = ["preview"]
+"Configuration" = ["configuration"]
+"Performance" = ["performance"]
+"Bug fixes" = ["bug"]
+"Rust API" = ["rustlib"]
+"Documentation" = ["documentation"]
+"Other changes" = ["__unknown__"]
+
+[tool.ruff]
+target-version = "py312"
+src = ["src"]
+line-length = 88
+extend-exclude = ["*.ipynb"]
+
+[tool.ruff.lint]
+extend-select = [
+    "B",   # flake8-bugbear: likely bugs / footguns
+    "I",   # isort-style import checks
+    "UP",  # pyupgrade: modern Python syntax
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = true
+
+[tool.pyrefly]
+python-interpreter-path = ".venv/bin/python"
+site-package-path = []
+
+[tool.ty.environment]
+extra-paths = []
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+stubPath = ""
+extraPaths = []
