@@ -136,6 +136,21 @@ Detected platforms map to tags as follows.
 
 The macOS minimum comes from the binary's `LC_BUILD_VERSION` when present. It can be overridden with `--glibc 2.28`, `--macos-min 12.0`, or replaced entirely with `--platform-tag manylinux_2_28_aarch64`.
 
+## Checking the project name
+
+Before building, wheelbarrow asks PyPI whether `--name` is already registered, with a `HEAD` of `https://pypi.org/simple/<name>/`: 200 means the name exists, 404 means it is free to claim. A registered name stays 200 even after every release has been deleted or yanked, so it cannot be reclaimed.
+
+```zsh
+$ wheelbarrow build ./rg --name ripgrep-bin --version 14.1.0
+note: ripgrep-bin is already registered on PyPI. Publishing will only work if
+      the project is yours; otherwise choose a different --name.
+built dist/ripgrep_bin-14.1.0-py3-none-macosx_11_0_arm64.whl (4.8 MiB)
+```
+
+This is advice, not a gate. It never fails the build, because a 200 cannot tell your own project apart from someone else's, and rebuilding a package you already own is the usual case. A free name is not remarked on.
+
+The lookup adds roughly 100 ms and is the only time wheelbarrow touches the network while building. If the index cannot be reached the build carries on regardless — pass `--verbose` to see that it was skipped, or `--no-check-name` to not ask at all.
+
 ## Publishing
 
 ```zsh
@@ -224,6 +239,7 @@ wheelbarrow build BINARY --name NAME --version VERSION
         --launcher MODE       direct (default) or shim
         --keep-project DIR    keep the generated project for inspection
         --isolated            build in an isolated PEP 517 environment
+        --no-check-name       skip the PyPI name lookup (see below)
     -v, --verbose             show build backend output
 
 wheelbarrow publish WHEELS...      token comes from $UV_PUBLISH_TOKEN

@@ -66,7 +66,7 @@ def check_name(
     except urllib.error.HTTPError as exc:
         # HTTPError is an OSError subclass, so it has to be caught first.
         return NameStatus.AVAILABLE if exc.code == 404 else NameStatus.UNKNOWN
-    except (OSError, ValueError):
+    except OSError, ValueError:
         # Offline, DNS failure, proxy refusal, TLS problem, timeout: all of
         # these mean "no answer", never "the name is free".
         return NameStatus.UNKNOWN

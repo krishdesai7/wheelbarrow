@@ -71,7 +71,7 @@ class TestNameCheck:
         """Run a build with a stubbed index, returning (invoke, calls)."""
         calls: list[str] = []
 
-        def build_with(status, *extra: str):
+        def build_with(status, *extra: str) -> Result:
             def fake_check(name, **_kwargs):
                 calls.append(name)
                 return status

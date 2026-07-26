@@ -133,7 +133,7 @@ class TestProjectRenderingCommon:
     """Behaviour that must hold whichever launcher is selected."""
 
     @pytest.fixture(params=[Launcher.DIRECT, Launcher.SHIM])
-    def project(self, request, tmp_path, elf_binary):
+    def project(self, request, tmp_path, elf_binary) -> tuple[Path, PackageSpec]:
         return build_project(tmp_path, elf_binary, launcher=request.param)
 
     def test_core_files_exist(self, project) -> None:
@@ -197,7 +197,7 @@ class TestProjectRenderingCommon:
 
 class TestDirectLauncher:
     @pytest.fixture
-    def project(self, tmp_path, elf_binary):
+    def project(self, tmp_path, elf_binary) -> tuple[Path, PackageSpec]:
         return build_project(tmp_path, elf_binary, aliases=["wb", "wheelbarrow"])
 
     def test_binary_is_staged_outside_the_module(self, project) -> None:
@@ -246,7 +246,7 @@ class TestDirectLauncher:
 
 class TestShimLauncher:
     @pytest.fixture
-    def project(self, tmp_path, elf_binary):
+    def project(self, tmp_path, elf_binary) -> tuple[Path, PackageSpec]:
         return build_project(
             tmp_path, elf_binary, launcher=Launcher.SHIM, aliases=["wb", "wheelbarrow"]
         )

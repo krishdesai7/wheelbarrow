@@ -26,13 +26,13 @@ def wheel(tmp_path):
 
 
 @pytest.fixture
-def token_set(monkeypatch):
+def token_set(monkeypatch) -> None:
     """Publish with credentials available."""
     monkeypatch.setenv(TOKEN_ENV, FAKE_TOKEN)
 
 
 @pytest.fixture
-def token_unset(monkeypatch):
+def token_unset(monkeypatch) -> None:
     """Publish with no credentials, whatever the developer's shell holds."""
     monkeypatch.delenv(TOKEN_ENV, raising=False)
 
@@ -128,7 +128,7 @@ class TestRunPublish:
         argv_seen: list[str] = []
         kwargs_seen: dict[str, object] = {}
 
-        def capture(argv, **kwargs):
+        def capture(argv, **kwargs) -> FakeCompleted:
             argv_seen.extend(argv)
             kwargs_seen.update(kwargs)
             return FakeCompleted(0)

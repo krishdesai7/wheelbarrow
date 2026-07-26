@@ -36,6 +36,12 @@ Two invariants drive most of the design:
 consulting `platform`/`sysconfig`, so a Linux wheel can be built on a Mac. Anything that would break
 cross-building is a bug.
 
+`pypi.check_name` is the one exception that proves the rule: it is the only network call in the
+build path. It must stay advisory — every failure mode returns `NameStatus.UNKNOWN` rather than
+raising, so builds keep working offline, and a `TAKEN` name is a warning, never an error (a 200
+cannot distinguish your own project from someone else's). Tests stub `urlopen`; never let the
+suite make a real request.
+
 **The backend cannot know the wheel is platform-specific.** The generated project looks pure-Python
 to `uv_build`, so the build always emits `py3-none-any` and `wheelfix.py` must rewrite the archive
 afterwards: file name, `Tag:`/`Root-Is-Purelib:` in `WHEEL`, uv's non-standard `WHEEL.json` (which

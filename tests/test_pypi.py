@@ -6,7 +6,9 @@ would make results depend on what happens to be registered today.
 
 from __future__ import annotations
 
+import email.message
 import urllib.error
+from typing import Self
 
 import pytest
 
@@ -19,7 +21,7 @@ class FakeResponse:
     def __init__(self, status: int) -> None:
         self.status = status
 
-    def __enter__(self) -> FakeResponse:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *_exc) -> None:
@@ -32,7 +34,7 @@ def calls(monkeypatch):
     seen: list[dict[str, object]] = []
     reply: dict[str, object] = {"response": FakeResponse(200)}
 
-    def fake_urlopen(request, timeout=None):
+    def fake_urlopen(request, timeout=None) -> object:
         seen.append({"request": request, "timeout": timeout})
         outcome = reply["response"]
         if isinstance(outcome, Exception):
@@ -45,7 +47,11 @@ def calls(monkeypatch):
 
 def http_error(code: int) -> urllib.error.HTTPError:
     return urllib.error.HTTPError(
-        url="https://pypi.org/simple/demo/", code=code, msg="", hdrs=None, fp=None
+        url="https://pypi.org/simple/demo/",
+        code=code,
+        msg="",
+        hdrs=email.message.Message(),
+        fp=None,
     )
 
 
@@ -108,17 +114,17 @@ class TestRequest:
         """Without one, a hung index would hang the build."""
         seen, _ = calls
         check_name("demo-bin")
-        assert seen[0]["timeout"] == DEFAULT_TIMEOUT
+        assert seen[0]["timeout"] == pytest.approx(DEFAULT_TIMEOUT)
 
     def test_the_timeout_is_overridable(self, calls) -> None:
         seen, _ = calls
         check_name("demo-bin", timeout=0.5)
-        assert seen[0]["timeout"] == 0.5
+        assert seen[0]["timeout"] == pytest.approx(0.5)
 
     def test_names_are_url_quoted(self, calls) -> None:
         """Normalisation should prevent this, but the URL is built defensively."""
         seen, _ = calls
         check_name("../etc/passwd")
-        assert "https://pypi.org/simple/..%2Fetc%2Fpasswd/" == (
+        assert (
             seen[0]["request"].full_url
-        )
+        ) == "https://pypi.org/simple/..%2Fetc%2Fpasswd/"

@@ -35,6 +35,7 @@ dev = [
     "pyrefly>=1.1.1",
     "pytest>=8.0",
     "ruff>=0.15.18",
+    "rust-just>=1.57.0",
 ]
 
 release = [

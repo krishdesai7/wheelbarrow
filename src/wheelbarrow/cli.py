@@ -7,10 +7,9 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from . import __version__
+from . import __version__, pypi
 from .builder import BuildResult, build_package
 from .errors import WheelbarrowError
-from . import pypi
 from .probe import BinaryInfo, inspect_binary
 from .publish import PublishPlan, plan_publish, resolve_token, run_publish
 from .pypi import NameStatus
