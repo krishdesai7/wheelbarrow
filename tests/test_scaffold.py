@@ -1,10 +1,9 @@
 """Tests for metadata normalisation, templating and asset staging."""
 
-from __future__ import annotations
-
 import compileall
 import stat
 import tomllib
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -20,12 +19,15 @@ from wheelbarrow.scaffold import (
     staged_paths,
 )
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
 
 def spec(**overrides) -> PackageSpec:
     kwargs: dict[str, str] = {
-        "name": "ripgrep-bin",
+        "name": "wheelbarrow-bin",
         "version": "15.2.0",
-        "binary_name": "rg",
+        "binary_name": "wb",
         "platform_tag": "macosx_11_0_arm64",
     }
     kwargs.update(overrides)
@@ -36,9 +38,9 @@ class TestNameNormalisation:
     @pytest.mark.parametrize(
         ("given", "dist", "module"),
         [
-            ("ripgrep-bin", "ripgrep-bin", "ripgrep_bin"),
-            ("Ripgrep_Bin", "ripgrep-bin", "ripgrep_bin"),
-            ("fd.find", "fd-find", "fd_find"),
+            ("wheelbarrow-bin", "wheelbarrow-bin", "wheelbarrow_bin"),
+            ("Wheelbarrow_Bin", "wheelbarrow-bin", "wheelbarrow_bin"),
+            ("bw.barrowwheel", "bw-barrowwheel", "bw_barrowwheel"),
             ("Some--Tool", "some-tool", "some_tool"),
         ],
     )
@@ -80,16 +82,16 @@ class TestAliases:
         assert spec(binary_name="rg.exe").aliases == ["rg"]
 
     def test_multiple_aliases_are_kept(self) -> None:
-        assert spec(aliases=["rg", "ripgrep"]).aliases == ["rg", "ripgrep"]
+        assert spec(aliases=["wb", "wheelbarrow"]).aliases == ["wb", "wheelbarrow"]
 
     def test_invalid_alias_is_rejected(self) -> None:
         with pytest.raises(MetadataError, match="invalid console script alias"):
-            spec(aliases=["rg; rm -rf /"])
+            spec(aliases=["wb; rm -rf /"])
 
 
 class TestStaging:
     def test_binary_is_made_executable(self, tmp_path) -> None:
-        source = tmp_path / "rg"
+        source = tmp_path / "wb"
         source.write_bytes(b"binary contents")
         source.chmod(0o644)  # as it would arrive from a zip archive
 
@@ -101,7 +103,7 @@ class TestStaging:
         assert destination.read_bytes() == b"binary contents"
 
     def test_source_permissions_do_not_leak(self, tmp_path) -> None:
-        source = tmp_path / "rg"
+        source = tmp_path / "wb"
         source.write_bytes(b"x")
         source.chmod(0o600)
         destination = tmp_path / "staged"
@@ -109,7 +111,9 @@ class TestStaging:
         assert stat.S_IMODE(destination.stat().st_mode) == 0o755
 
 
-def build_project(tmp_path, binary, **overrides):
+def build_project(
+    tmp_path: Path, binary: Path, **overrides
+) -> tuple[Path, PackageSpec]:
     root = tmp_path / "project"
     root.mkdir(exist_ok=True)
     s = spec(
@@ -144,16 +148,27 @@ class TestProjectRenderingCommon:
         data = tomllib.loads((root / "pyproject.toml").read_text())
         assert data["build-system"]["build-backend"] == "uv_build"
         assert data["build-system"]["requires"] == ["uv_build>=0.11.30,<0.12"]
-        assert data["tool"]["uv"]["build-backend"]["module-name"] == "ripgrep_bin"
+        assert data["tool"]["uv"]["build-backend"]["module-name"] == "wheelbarrow_bin"
         assert data["tool"]["uv"]["build-backend"]["module-root"] == "src"
 
     def test_common_metadata(self, project) -> None:
         root, _ = project
         data = tomllib.loads((root / "pyproject.toml").read_text())
-        assert data["project"]["name"] == "ripgrep-bin"
+        assert data["project"]["name"] == "wheelbarrow-bin"
         assert data["project"]["version"] == "15.2.0"
         assert data["project"]["urls"]["Homepage"] == "https://example.com"
         assert data["project"]["keywords"] == ["search", "grep"]
+
+    def test_licence_is_written_under_the_key_pep_621_defines(self, project) -> None:
+        """Our identifiers say `licence`; the emitted key must say `license`.
+
+        Backends ignore an unrecognised key silently, so getting this wrong
+        drops the field from the wheel's METADATA without any error.
+        """
+        root, _ = project
+        data = tomllib.loads((root / "pyproject.toml").read_text())
+        assert data["project"]["license"] == "MIT"
+        assert "licence" not in data["project"]
 
     def test_metadata_strings_are_escaped(self, project) -> None:
         """A description containing quotes must not corrupt the TOML."""
@@ -177,25 +192,25 @@ class TestProjectRenderingCommon:
 
     def test_readme_mentions_the_install_command(self, project) -> None:
         root, _ = project
-        assert "uv tool install ripgrep-bin" in (root / "README.md").read_text()
+        assert "uv tool install wheelbarrow-bin" in (root / "README.md").read_text()
 
 
 class TestDirectLauncher:
     @pytest.fixture
     def project(self, tmp_path, elf_binary):
-        return build_project(tmp_path, elf_binary, aliases=["rg", "ripgrep"])
+        return build_project(tmp_path, elf_binary, aliases=["wb", "wheelbarrow"])
 
     def test_binary_is_staged_outside_the_module(self, project) -> None:
         """Inside `src/` it would also be swept in as package data."""
         root, s = project
-        assert (root / SCRIPTS_DIR / "rg").is_file()
+        assert (root / SCRIPTS_DIR / "wb").is_file()
         assert not (root / "src" / s.module / "bin").exists()
 
     def test_one_copy_per_alias_named_after_the_alias(self, project) -> None:
         root, s = project
         assert staged_paths(s, root) == [
-            root / SCRIPTS_DIR / "rg",
-            root / SCRIPTS_DIR / "ripgrep",
+            root / SCRIPTS_DIR / "wb",
+            root / SCRIPTS_DIR / "wheelbarrow",
         ]
 
     def test_no_console_scripts(self, project) -> None:
@@ -212,13 +227,13 @@ class TestDirectLauncher:
     def test_archive_paths_target_the_data_directory(self, project) -> None:
         _, s = project
         assert archive_executables(s) == {
-            "ripgrep_bin-15.2.0.data/scripts/rg",
-            "ripgrep_bin-15.2.0.data/scripts/ripgrep",
+            "wheelbarrow_bin-15.2.0.data/scripts/wb",
+            "wheelbarrow_bin-15.2.0.data/scripts/wheelbarrow",
         }
 
     def test_installed_name_follows_the_first_alias(self) -> None:
-        s = spec(binary_name="fd-v10", aliases=["fd"])
-        assert s.installed_name == "fd"
+        s = spec(binary_name="bw-v10", aliases=["bw"])
+        assert s.installed_name == "bw"
 
     def test_locator_prefers_paths_beside_the_package(self, project) -> None:
         """`sysconfig` is wrong under `pip install --target`, so it comes last."""
@@ -233,24 +248,24 @@ class TestShimLauncher:
     @pytest.fixture
     def project(self, tmp_path, elf_binary):
         return build_project(
-            tmp_path, elf_binary, launcher=Launcher.SHIM, aliases=["rg", "ripgrep"]
+            tmp_path, elf_binary, launcher=Launcher.SHIM, aliases=["wb", "wheelbarrow"]
         )
 
     def test_binary_is_staged_inside_the_package(self, project) -> None:
         root, s = project
-        assert (root / "src" / s.module / "bin" / "rg").is_file()
+        assert (root / "src" / s.module / "bin" / "wb").is_file()
         assert not (root / SCRIPTS_DIR).exists()
 
     def test_one_shared_copy_regardless_of_alias_count(self, project) -> None:
         root, s = project
-        assert staged_paths(s, root) == [root / "src" / s.module / "bin" / "rg"]
+        assert staged_paths(s, root) == [root / "src" / s.module / "bin" / "wb"]
 
     def test_console_scripts_cover_every_alias(self, project) -> None:
         root, _ = project
         data = tomllib.loads((root / "pyproject.toml").read_text())
         assert data["project"]["scripts"] == {
-            "rg": "ripgrep_bin.__main__:main",
-            "ripgrep": "ripgrep_bin.__main__:main",
+            "wb": "wheelbarrow_bin.__main__:main",
+            "wheelbarrow": "wheelbarrow_bin.__main__:main",
         }
 
     def test_no_data_scripts_mapping(self, project) -> None:
@@ -260,8 +275,8 @@ class TestShimLauncher:
 
     def test_archive_path_is_inside_the_package(self, project) -> None:
         _, s = project
-        assert archive_executables(s) == {"ripgrep_bin/bin/rg"}
+        assert archive_executables(s) == {"wheelbarrow_bin/bin/wb"}
 
     def test_installed_name_keeps_the_source_file_name(self) -> None:
-        s = spec(binary_name="fd-v10", aliases=["fd"], launcher=Launcher.SHIM)
-        assert s.installed_name == "fd-v10"
+        s = spec(binary_name="bw-v10", aliases=["bw"], launcher=Launcher.SHIM)
+        assert s.installed_name == "bw-v10"

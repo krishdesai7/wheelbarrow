@@ -70,10 +70,10 @@ class Launcher(StrEnum):
 class PackageSpec:
     """Everything needed to render a project, already validated."""
 
-    dist_name: str  # PEP 503 normalised, e.g. "ripgrep-bin"
-    module: str  # importable, e.g. "ripgrep_bin"
+    dist_name: str  # PEP 503 normalised, e.g. "wheelbarrow-bin"
+    module: str  # importable, e.g. "wheelbarrow_bin"
     version: str  # PEP 440 normalised
-    binary_name: str  # file name inside bin/, e.g. "rg"
+    binary_name: str  # file name inside bin/, e.g. "wb"
     aliases: list[str]  # console scripts to expose
     platform_tag: str
     launcher: Launcher = Launcher.DIRECT
@@ -252,7 +252,11 @@ def _render_project_extra(spec: PackageSpec) -> str:
     """Render optional fields in the generated ``[project]`` table."""
     extra: list[str] = []
     if spec.licence:
-        extra.append(f"licence = {toml_str(spec.licence)}")
+        # PEP 621 fixes the spelling of the key itself, so this one stays
+        # American even though our own identifiers do not. Emitting `licence`
+        # here is silently ignored by the backend and drops the field from the
+        # wheel's METADATA entirely.
+        extra.append(f"license = {toml_str(spec.licence)}")
     if spec.authors:
         entries: list[str] = []
         for name, email in spec.authors:

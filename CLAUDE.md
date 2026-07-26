@@ -75,8 +75,13 @@ command, so it is named after the first alias, not after the source file.
 - `uv_build` is a direct runtime dependency of wheelbarrow so the default (non-`--isolated`) build
   path can run the backend in-process instead of provisioning a venv. It is pinned to `>=0.11.30,<0.12`
   in both `pyproject.toml` and the generated `PYPROJECT` template; those pins must move together.
-- Publishing shells out to `uv publish`. The token is passed via `UV_PUBLISH_TOKEN` in the
-  environment, never in `argv` — keep it out of `PublishPlan.argv` and `display()`.
+- Publishing shells out to `uv publish`. The token is read from `UV_PUBLISH_TOKEN` by
+  `publish.resolve_token()` and never travels in `argv`: there is deliberately no `--token`
+  option, and `run_publish` lets uv inherit the environment rather than forwarding the value.
+  Keep credentials out of `PublishPlan.argv` and `display()`.
+- User-facing spelling is `licence`, but `scaffold.render_pyproject` must emit `license` —
+  PEP 621 fixes that key, and a backend silently ignores an unrecognised one, dropping the
+  field from the wheel's METADATA with no error.
 
 ### Tests
 

@@ -10,8 +10,10 @@ from rich.table import Table
 from . import __version__
 from .builder import BuildResult, build_package
 from .errors import WheelbarrowError
+from . import pypi
 from .probe import BinaryInfo, inspect_binary
-from .publish import PublishPlan, plan_publish, run_publish
+from .publish import PublishPlan, plan_publish, resolve_token, run_publish
+from .pypi import NameStatus
 from .scaffold import Launcher, PackageSpec, make_spec
 from .tags import full_tag, platform_tag
 
@@ -123,9 +125,7 @@ def _print_info(info: BinaryInfo, tag: str) -> None:
 @app.command("build", no_args_is_help=True)
 def build_command(
     binary: Annotated[Path, typer.Argument(help="Path to the executable to package.")],
-    name: Annotated[
-        str, typer.Option("--name", "-n", help="PyPI project name, e.g. `ripgrep-bin`.")
-    ],
+    name: Annotated[str, typer.Option("--name", "-n", help="PyPI project name.")],
     version: Annotated[
         str, typer.Option("--version", "-V", help="Package version (PEP 440).")
     ],
@@ -201,6 +201,14 @@ def build_command(
         bool,
         typer.Option("--isolated", help="Build in an isolated PEP 517 environment."),
     ] = False,
+    check_name: Annotated[
+        bool,
+        typer.Option(
+            "--check-name/--no-check-name",
+            help="Ask PyPI whether **--name** is already registered, and warn "
+            "if it is. Advisory only; never fails the build.",
+        ),
+    ] = True,
     verbose: Annotated[
         bool, typer.Option("--verbose", "-v", help="Show build backend output.")
     ] = False,
@@ -212,7 +220,7 @@ def build_command(
 
     Example:
 
-        wheelbarrow build ./rg --name ripgrep-bin --version 14.1.0 --alias rg
+        wheelbarrow build <path-to-binary> -n <binary-name> -V <version> -a <alias>
     """
     try:
         info: BinaryInfo | None
@@ -254,6 +262,9 @@ def build_command(
                     f"tag; the other slices will not be advertised."
                 )
 
+        if check_name:
+            _warn_if_name_is_taken(spec.dist_name, verbose=verbose)
+
         if spec.launcher is Launcher.DIRECT and len(spec.aliases) > 1:
             # Each alias *is* the installed file, so each needs its own copy.
             console.print(
@@ -282,6 +293,27 @@ def build_command(
     console.print(f"[dim]  scripts  [/] {', '.join(spec.aliases)}")
     if result.project_dir:
         console.print(f"[dim]  project  [/] {result.project_dir}")
+
+
+def _warn_if_name_is_taken(dist_name: str, *, verbose: bool) -> None:
+    """Report a name that is already registered on PyPI.
+
+    Only the taken case is worth interrupting for. A free name needs no
+    comment, and an unreachable index is not the user's problem unless they
+    asked for detail, so both stay quiet.
+    """
+    status: NameStatus = pypi.check_name(dist_name)
+    if status is NameStatus.TAKEN:
+        console.print(
+            f"[yellow]note:[/] [bold]{dist_name}[/] is already registered on "
+            f"PyPI. Publishing will only work if the project is yours; "
+            f"otherwise choose a different --name."
+        )
+    elif status is NameStatus.UNKNOWN and verbose:
+        console.print(
+            f"[dim]note:[/] could not reach PyPI to check whether "
+            f"{dist_name} is registered; continuing."
+        )
 
 
 def _human_size(size: float) -> str:
@@ -333,31 +365,27 @@ def publish_command(
     wheels: Annotated[list[Path], typer.Argument(help="Wheel files to upload.")],
     index: Annotated[
         str | None,
-        typer.Option("--index", help="Named index from your uv configuration."),
+        typer.Option(help="Named index from your uv configuration."),
     ] = None,
     publish_url: Annotated[
         str | None,
-        typer.Option("--publish-url", help="Upload URL of the target index."),
-    ] = None,
-    token: Annotated[
-        str | None,
-        typer.Option(
-            "--token",
-            help="API token. Passed to uv through the environment, never argv.",
-        ),
+        typer.Option(help="Upload URL of the target index."),
     ] = None,
     username: Annotated[
-        str | None, typer.Option("--username", help="Username for the index.")
+        str | None, typer.Option(help="Username for the index.")
     ] = None,
     dry_run: Annotated[
         bool,
-        typer.Option("--dry-run", help="Show the uv command without running it."),
+        typer.Option(help="Show the uv command without running it."),
     ] = False,
     yes: Annotated[
         bool, typer.Option("--yes", "-y", help="Skip the confirmation prompt.")
     ] = False,
 ) -> None:
     """Upload built wheels with `uv publish`.
+
+    The API token is read from `UV_PUBLISH_TOKEN` in the environment; there is
+    no option for it, so it cannot end up in your shell history.
 
     Publishing is permanent: PyPI does not allow re-uploading a version that
     has already been released, so wheelbarrow asks for confirmation first.
@@ -367,9 +395,12 @@ def publish_command(
             list(wheels),
             index=index,
             publish_url=publish_url,
-            token=token,
             username=username,
         )
+        if plan.needs_token and not dry_run:
+            # Checked up front so a missing token is reported before the user
+            # is asked to confirm, rather than after they commit to the upload.
+            resolve_token()
     except WheelbarrowError as exc:
         raise _fail(str(exc)) from exc
 
@@ -392,7 +423,7 @@ def publish_command(
             raise typer.Exit(code=1)
 
     try:
-        run_publish(plan, token=token)
+        run_publish(plan)
     except WheelbarrowError as exc:
         raise _fail(str(exc)) from exc
 

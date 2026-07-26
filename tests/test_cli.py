@@ -4,6 +4,7 @@ import pytest
 from typer.testing import CliRunner, Result
 
 from wheelbarrow.cli import app
+from wheelbarrow.pypi import NameStatus
 
 runner = CliRunner()
 
@@ -60,6 +61,95 @@ class TestHelpCommand:
         assert "frobnicate" in written
         for command in COMMANDS:
             assert command in written
+
+
+class TestNameCheck:
+    """`build` warns about a registered name, but never fails over it."""
+
+    @pytest.fixture
+    def built(self, tmp_path, elf_binary, monkeypatch):
+        """Run a build with a stubbed index, returning (invoke, calls)."""
+        calls: list[str] = []
+
+        def build_with(status, *extra: str):
+            def fake_check(name, **_kwargs):
+                calls.append(name)
+                return status
+
+            monkeypatch.setattr("wheelbarrow.pypi.check_name", fake_check)
+            return run(
+                "build",
+                str(elf_binary),
+                "-n",
+                "demo-bin",
+                "-V",
+                "1.0.0",
+                "-o",
+                str(tmp_path / "dist"),
+                *extra,
+            )
+
+        return build_with, calls
+
+    def test_a_taken_name_warns_but_still_builds(self, built) -> None:
+        build_with, _ = built
+        result = build_with(NameStatus.TAKEN)
+        assert result.exit_code == 0
+        written = everything_written(result)
+        assert "already registered" in written
+        assert "built" in written
+
+    def test_an_available_name_says_nothing(self, built) -> None:
+        build_with, _ = built
+        result = build_with(NameStatus.AVAILABLE)
+        assert result.exit_code == 0
+        assert "already registered" not in everything_written(result)
+
+    def test_an_unreachable_index_is_quiet_but_still_builds(self, built) -> None:
+        """Building offline must not be noisy, nor fail."""
+        build_with, _ = built
+        result = build_with(NameStatus.UNKNOWN)
+        assert result.exit_code == 0
+        assert "could not reach" not in everything_written(result)
+        assert "built" in everything_written(result)
+
+    def test_verbose_explains_an_unreachable_index(self, built) -> None:
+        build_with, _ = built
+        result = build_with(NameStatus.UNKNOWN, "--verbose")
+        assert "could not reach" in everything_written(result)
+
+    def test_no_check_name_makes_no_request_at_all(self, built) -> None:
+        build_with, calls = built
+        result = build_with(NameStatus.TAKEN, "--no-check-name")
+        assert result.exit_code == 0
+        assert calls == []
+        assert "already registered" not in everything_written(result)
+
+    def test_the_normalised_name_is_what_gets_looked_up(self, built) -> None:
+        """PyPI's simple index is keyed by the PEP 503 form."""
+        build_with, calls = built
+        build_with(NameStatus.AVAILABLE)
+        assert calls == ["demo-bin"]
+
+
+class TestPublishTakesNoToken:
+    """The token is environment-only, so it cannot reach a shell history."""
+
+    def test_there_is_no_token_option(self) -> None:
+        assert "--token" not in run("publish", "--help").output
+
+    def test_missing_token_is_reported_before_the_prompt(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        monkeypatch.delenv("UV_PUBLISH_TOKEN", raising=False)
+        wheel = tmp_path / "demo_bin-1.0.0-py3-none-any.whl"
+        wheel.write_bytes(b"not really a wheel")
+
+        # No input supplied: if the confirmation prompt were reached first, the
+        # runner would fail on the empty stdin rather than report the token.
+        result = run("publish", str(wheel))
+        assert result.exit_code == 1
+        assert "UV_PUBLISH_TOKEN" in everything_written(result)
 
 
 class TestErrorsAreNotReplacedByHelp:

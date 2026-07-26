@@ -149,7 +149,13 @@ Publish now? [y/N]:
 This shells out to `uv publish`. Use `--dry-run` to see the exact command, and
 `--yes` to skip the prompt in CI.
 
-A `UV_PUBLISH_TOKEN` must be passed to uv through the environment. It cannot be passed on the command line, to avoid leaking it in `ps` output.
+The API token is read from `UV_PUBLISH_TOKEN` in the environment. There is deliberately no `--token` option, so the token cannot leak into `ps` output or your shell history:
+
+```zsh
+export UV_PUBLISH_TOKEN=pypi-...
+```
+
+Wheelbarrow checks for it before asking for confirmation, so a missing token is reported straight away rather than after you have committed to the upload. Note that a `.env` file is not loaded automatically; either export the variable or run `uv run --env-file .env wheelbarrow publish ...`.
 
 To publish one package for several platforms, build a wheel per binary and upload them together. Installers will select which wheel to install based on the platform tag.
 
@@ -220,9 +226,9 @@ wheelbarrow build BINARY --name NAME --version VERSION
         --isolated            build in an isolated PEP 517 environment
     -v, --verbose             show build backend output
 
-wheelbarrow publish WHEELS...
+wheelbarrow publish WHEELS...      token comes from $UV_PUBLISH_TOKEN
         --index NAME | --publish-url URL
-        --token TOKEN / --username NAME
+        --username NAME
         --dry-run             print the uv command without running it
     -y, --yes                 skip the confirmation prompt
 
