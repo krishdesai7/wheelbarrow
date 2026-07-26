@@ -51,6 +51,12 @@ def platform_tag(
     universal2: bool = False,
 ) -> str:
     """Return the wheel platform tag matching `info`."""
+    if info.os == "any":
+        # A script holds no machine code, so nothing about the wheel's contents
+        # constrains where it may be installed. Its interpreter does, but there
+        # is no tag for "needs /bin/sh"; the closest honest answer is `any`,
+        # and `--platform-tag` is there to narrow it.
+        return "any"
     if info.os == "linux":
         return _linux_tag(info, glibc_version)
     if info.os == "macos":

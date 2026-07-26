@@ -8,6 +8,11 @@ this module reads its headers directly. This enables cross-building.
 Only the header prefix of each format is parsed. This is enough to recover the CPU
 architecture, the operating system, and (where it is cheap to do so) the libc
 flavour on Linux and the minimum macOS version.
+
+Not every tool ships as machine code. A file beginning with `#!` is a script,
+which contains no architecture to detect and is therefore reported as
+`os="any"`, `arch="any"` -- the one input for which nothing is parsed beyond the
+first line.
 """
 
 import struct
@@ -20,6 +25,11 @@ from .errors import InspectionError
 # Format constants
 ELF_MAGIC: Final[bytes] = b"\x7fELF"
 PE_MAGIC: Final[bytes] = b"MZ"
+SHEBANG: Final[bytes] = b"#!"
+
+#: Longest shebang line we read. Linux truncates at BINPRM_BUF_SIZE (256) and
+#: silently ignores the rest, so there is nothing meaningful past it.
+SHEBANG_LIMIT: Final[int] = 0x100
 
 # Keyed by the first four bytes read as a big-endian integer. A little-endian
 # Mach-O stores MH_MAGIC_64 (0xFEEDFACF) as `cf fa ed fe`, which reads back as
@@ -74,18 +84,25 @@ class BinaryInfo:
     """Information about an input binary."""
 
     path: Path
-    format: str  # "elf" | "macho" | "macho-universal" | "pe"
-    os: str  # "linux" | "macos" | "windows"
-    arch: str  # Normalised architecture name, e.g. "x86_64", "aarch64", "arm64"
+    format: str  # "elf" | "macho" | "macho-universal" | "pe" | "script"
+    os: str  # "linux" | "macos" | "windows" | "any"
+    arch: str  # Normalised architecture name, e.g. "x86_64"; "any" for a script
     libc: str | None = None  # "glibc" | "musl" | "static" (Linux only)
     macos_min: tuple[int, int] | None = None
     slices: tuple[str, ...] = ()  # Architectures in a universal binary
+    interpreter: str | None = None  # Shebang command, scripts only
 
     @property
     def is_universal(self) -> bool:
         return len(self.slices) > 1
 
+    @property
+    def is_script(self) -> bool:
+        return self.format == "script"
+
     def describe(self) -> str:
+        if self.is_script:
+            return f"script, interpreter={self.interpreter}"
         bits: list[str] = [f"{self.format}", f"{self.os}/{self.arch}"]
         if self.libc:
             bits.append(f"libc={self.libc}")
@@ -113,6 +130,8 @@ def inspect_binary(path: Path) -> BinaryInfo:
     if len(head) < 0x04:
         raise InspectionError(f"{path} is too small to be an executable")
 
+    if head.startswith(SHEBANG):
+        return _parse_script(path, head)
     if head.startswith(ELF_MAGIC):
         return _parse_elf(path, head)
     if head.startswith(PE_MAGIC):
@@ -124,15 +143,36 @@ def inspect_binary(path: Path) -> BinaryInfo:
     if magic_be in MACHO_MAGICS:
         return _parse_macho(path, head, magic_be)
 
-    if head.startswith(b"#!"):
-        raise InspectionError(
-            f"{path} is a script, not a native executable. Scripts are not tied "
-            f"to a platform; pass --platform-tag explicitly if you really want "
-            f"to package it."
-        )
     raise InspectionError(
         f"unrecognised executable format in {path} "
-        f"(leading bytes: {head[:0x04].hex()}). Pass --platform-tag to skip detection."
+        f"(leading bytes: {head[:0x04].hex()}). A script needs a `#!` line to be "
+        f"recognised as one; otherwise pass --platform-tag to skip detection."
+    )
+
+
+def _parse_script(path: Path, head: bytes) -> BinaryInfo:
+    """Describe a `#!` script.
+
+    There is nothing to decode: a script is source text, so no architecture,
+    operating system or libc constrains it. What it *does* depend on is the
+    interpreter named on the first line, which no wheel tag can express, so
+    that is recorded for the caller to report rather than acted upon.
+    """
+    line: bytes = head[:SHEBANG_LIMIT].split(b"\n", 1)[0]
+    # Scripts are text, but the encoding is not ours to assume; only the
+    # shebang is read, and replacement characters there are harmless.
+    interpreter: str = line[len(SHEBANG) :].decode("utf-8", "replace").strip()
+    if not interpreter:
+        raise InspectionError(
+            f"{path}: `#!` is not followed by an interpreter, so the script "
+            f"cannot be executed directly"
+        )
+    return BinaryInfo(
+        path=path,
+        format="script",
+        os="any",
+        arch="any",
+        interpreter=interpreter,
     )
 
 

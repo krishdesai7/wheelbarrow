@@ -151,6 +151,47 @@ class TestWheelContents:
         assert names.count("demo_bin-1.2.3.dist-info/RECORD") == 1
 
 
+class TestScriptBuild:
+    """Not every tool is machine code; a `#!` script packages the same way."""
+
+    @pytest.fixture(params=[Launcher.DIRECT, Launcher.SHIM])
+    def built(self, request, shell_script, tmp_path) -> BuildResult:
+        return build(shell_script, tmp_path / "dist", launcher=request.param)
+
+    def test_the_wheel_is_pure_python_tagged(self, built) -> None:
+        """Nothing in a script constrains where it can be installed."""
+        assert built.tag == "py3-none-any"
+        assert built.wheel.name == "demo_bin-1.2.3-py3-none-any.whl"
+
+    def test_purelib_is_declared(self, built) -> None:
+        """The counterpart of the `any` tag: no platform-specific content."""
+        with zipfile.ZipFile(built.wheel) as zf:
+            text = zf.read("demo_bin-1.2.3.dist-info/WHEEL").decode()
+        assert "Tag: py3-none-any" in text
+        assert "Root-Is-Purelib: true" in text
+
+    def test_the_script_is_stored_executable(self, built) -> None:
+        """A script that is not executable is not a command."""
+        expected = archive_executables(built.spec)
+        with zipfile.ZipFile(built.wheel) as zf:
+            assert expected <= set(zf.namelist())
+            for path in expected:
+                assert entry_mode(zf.getinfo(path)) == 0o755, path
+
+    def test_the_shebang_survives_the_round_trip(self, built) -> None:
+        """Installers rewrite `#!python` shebangs; ours must be left alone."""
+        with zipfile.ZipFile(built.wheel) as zf:
+            for path in archive_executables(built.spec):
+                assert zf.read(path).startswith(b"#!/bin/sh\n")
+
+    def test_the_alias_drops_the_extension(self, shell_script, tmp_path) -> None:
+        """`tool.sh` should install as `tool`, not `tool.sh`."""
+        result: BuildResult = build(shell_script, tmp_path / "dist")
+        assert result.spec.aliases == ["tool"]
+        with zipfile.ZipFile(result.wheel) as zf:
+            assert "demo_bin-1.2.3.data/scripts/tool" in zf.namelist()
+
+
 class TestLauncherLayouts:
     @pytest.fixture
     def elf(self, write_binary):
@@ -198,7 +239,17 @@ class TestLauncherLayouts:
 class TestWheelJsonRewrite:
     """uv's non-standard WHEEL.json must not contradict WHEEL after retagging."""
 
-    def test_wheel_json_is_kept_in_step(self, write_binary, tmp_path) -> None:
+    @pytest.mark.parametrize(
+        ("tag", "pure"),
+        [
+            ("py3-none-manylinux_2_17_x86_64", False),
+            # A script's wheel really is pure, and both files must say so.
+            ("py3-none-any", True),
+        ],
+    )
+    def test_wheel_json_is_kept_in_step(
+        self, write_binary, tmp_path, tag, pure
+    ) -> None:
         binary = write_binary("tool", make_elf(0x3E))
         result = build(binary, tmp_path / "dist")
 
@@ -224,16 +275,17 @@ class TestWheelJsonRewrite:
                 ),
             )
 
-        retagged = retag_wheel(
-            source, tag="py3-none-manylinux_2_17_x86_64", executable_paths=set()
-        )
+        retagged = retag_wheel(source, tag=tag, executable_paths=set())
         with zipfile.ZipFile(retagged.path) as zf:
             payload = json.loads(
                 zf.read("demo_bin-1.2.3.dist-info/WHEEL.json").decode()
             )
-        assert payload["tags"] == ["py3-none-manylinux_2_17_x86_64"]
-        assert payload["root-is-purelib"] is False
+            meta = zf.read("demo_bin-1.2.3.dist-info/WHEEL").decode()
+        assert payload["tags"] == [tag]
+        assert payload["root-is-purelib"] is pure
         assert payload["unknown-key"] == "preserved"
+        # The whole point of rewriting WHEEL.json: the two must agree.
+        assert f"Root-Is-Purelib: {str(pure).lower()}" in meta
 
 
 class TestReproducibility:
@@ -277,7 +329,8 @@ class TestInstalledWheelRuns:
     """Install a wheel wrapping a real executable and run it.
 
     Uses a tiny shell script rather than a compiled binary so the test stays
-    portable; an explicit platform tag bypasses format detection for it.
+    portable, which also makes this the end-to-end check that a script is
+    detected, tagged and installed without any explicit platform tag.
     """
 
     @pytest.fixture(params=[Launcher.DIRECT, Launcher.SHIM])
@@ -291,7 +344,7 @@ class TestInstalledWheelRuns:
             name="greet-bin",
             version="0.1.0",
             binary_name="greet",
-            platform_tag="any",
+            platform_tag=platform_tag(inspect_binary(binary)),
             launcher=request.param,
         )
         result = build_package(binary, spec, tmp_path / "dist")

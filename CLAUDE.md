@@ -42,10 +42,19 @@ raising, so builds keep working offline, and a `TAKEN` name is a warning, never 
 cannot distinguish your own project from someone else's). Tests stub `urlopen`; never let the
 suite make a real request.
 
+Not every input is machine code. `probe.py` reports a `#!` file as `format="script"`, `os="any"`,
+`arch="any"` plus the shebang line, and `tags.platform_tag` maps that to `any`. That is deliberately
+broader than the truth — a `py3-none-any` wheel installs on Windows too — because no wheel tag can
+express "needs /bin/sh"; `cli._note_tagging_caveats` says so instead of narrowing it silently.
+Everything downstream (staging, both launchers, the 0o755 bit, alias derivation) already worked for
+scripts, so nothing there is special-cased.
+
 **The backend cannot know the wheel is platform-specific.** The generated project looks pure-Python
 to `uv_build`, so the build always emits `py3-none-any` and `wheelfix.py` must rewrite the archive
 afterwards: file name, `Tag:`/`Root-Is-Purelib:` in `WHEEL`, uv's non-standard `WHEEL.json` (which
 would otherwise contradict `WHEEL`), mode `0o755` on the embedded binary, and a regenerated `RECORD`.
+`Root-Is-Purelib` is derived from the tag by `wheelfix._is_pure`, not hardcoded: `false` for a real
+platform tag, `true` for `any`, and `WHEEL.json` must keep agreeing with `WHEEL` about it.
 Every entry is written at `ZIP_EPOCH`, so identical inputs produce byte-identical wheels — tests
 assert this, so do not introduce real timestamps or non-deterministic ordering.
 

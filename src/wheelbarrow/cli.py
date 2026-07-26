@@ -110,6 +110,8 @@ def _print_info(info: BinaryInfo, tag: str) -> None:
     table.add_row("format", info.format)
     table.add_row("os", info.os)
     table.add_row("arch", info.arch)
+    if info.interpreter:
+        table.add_row("interpreter", info.interpreter)
     if info.libc:
         table.add_row("libc", info.libc)
     if info.macos_min:
@@ -247,19 +249,8 @@ def build_command(
             homepage=homepage,
         )
 
-        if info is not None and info.is_universal:
-            slices: str = "+".join(info.slices)
-            if tag.endswith("universal2"):
-                console.print(
-                    f"[dim]note:[/] {binary.name} is a universal binary "
-                    f"({slices}); tagged [bold]universal2[/], valid for both."
-                )
-            else:
-                console.print(
-                    f"[yellow]note:[/] {binary.name} is a universal binary "
-                    f"({slices}), but only [bold]{info.arch}[/] maps to a wheel "
-                    f"tag; the other slices will not be advertised."
-                )
+        if info is not None:
+            _note_tagging_caveats(info, tag)
 
         if check_name:
             _warn_if_name_is_taken(spec.dist_name, verbose=verbose)
@@ -292,6 +283,35 @@ def build_command(
     console.print(f"[dim]  scripts  [/] {', '.join(spec.aliases)}")
     if result.project_dir:
         console.print(f"[dim]  project  [/] {result.project_dir}")
+
+
+def _note_tagging_caveats(info: BinaryInfo, tag: str) -> None:
+    """Explain a tag that does not describe the input as precisely as it looks.
+
+    Only reachable when the tag was detected: `--platform-tag` means the user
+    has already decided, and there is nothing left to point out.
+    """
+    name: str = info.path.name
+    if info.is_script:
+        console.print(
+            f"[dim]note:[/] {name} is a script run by [bold]{info.interpreter}[/], "
+            f"so the wheel is tagged [bold]any[/] and will install anywhere, "
+            f"including where that interpreter does not exist. Pass "
+            f"--platform-tag to narrow it."
+        )
+    elif info.is_universal:
+        slices: str = "+".join(info.slices)
+        if tag.endswith("universal2"):
+            console.print(
+                f"[dim]note:[/] {name} is a universal binary "
+                f"({slices}); tagged [bold]universal2[/], valid for both."
+            )
+        else:
+            console.print(
+                f"[yellow]note:[/] {name} is a universal binary "
+                f"({slices}), but only [bold]{info.arch}[/] maps to a wheel "
+                f"tag; the other slices will not be advertised."
+            )
 
 
 def _warn_if_name_is_taken(dist_name: str, *, verbose: bool) -> None:

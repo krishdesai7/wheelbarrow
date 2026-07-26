@@ -140,6 +140,53 @@ class TestNameCheck:
         assert calls == ["demo-bin"]
 
 
+class TestScriptSupport:
+    """A `#!` script packages like a binary, but constrains no platform."""
+
+    def build_script(self, script, tmp_path, *extra: str) -> Result:
+        return run(
+            "build",
+            str(script),
+            "-n",
+            "demo-bin",
+            "-V",
+            "1.0.0",
+            "-o",
+            str(tmp_path / "dist"),
+            "--no-check-name",
+            *extra,
+        )
+
+    def test_inspect_reports_the_interpreter(self, shell_script) -> None:
+        result = run("inspect", str(shell_script))
+        rendered = plain_output(result)
+        assert result.exit_code == 0
+        assert "script" in rendered
+        assert "/bin/sh" in rendered
+        assert "py3-none-any" in rendered
+
+    def test_building_a_script_needs_no_platform_tag(
+        self, shell_script, tmp_path
+    ) -> None:
+        result = self.build_script(shell_script, tmp_path)
+        assert result.exit_code == 0
+        assert (tmp_path / "dist" / "demo_bin-1.0.0-py3-none-any.whl").is_file()
+
+    def test_the_any_tag_is_explained(self, shell_script, tmp_path) -> None:
+        """`any` installs on Windows too, where /bin/sh does not exist."""
+        written = everything_written(self.build_script(shell_script, tmp_path))
+        assert "/bin/sh" in written
+        assert "--platform-tag" in written
+
+    def test_an_explicit_tag_says_nothing(self, shell_script, tmp_path) -> None:
+        """The note is advice on a detected tag; an override is a decision."""
+        result = self.build_script(
+            shell_script, tmp_path, "--platform-tag", "manylinux_2_17_x86_64"
+        )
+        assert result.exit_code == 0
+        assert "--platform-tag" not in everything_written(result)
+
+
 class TestPublishTakesNoToken:
     """The token is environment-only, so it cannot reach a shell history."""
 

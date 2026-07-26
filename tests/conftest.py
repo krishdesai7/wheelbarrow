@@ -183,3 +183,13 @@ def elf_binary(write_binary: Callable[[str, bytes, Mode], Path]) -> Path:
 @pytest.fixture
 def macho_binary(write_binary) -> Path:
     return write_binary("tool", make_macho(0x0100000C))
+
+
+#: A real, runnable script: the installed-wheel test executes what it packages,
+#: and `$@` forwarding is what proves the launcher passes arguments through.
+SHELL_SCRIPT: Final[bytes] = b'#!/bin/sh\nexec echo "tool:" "$@"\n'
+
+
+@pytest.fixture
+def shell_script(write_binary: Callable[[str, bytes, Mode], Path]) -> Path:
+    return write_binary("tool.sh", SHELL_SCRIPT, Mode.EXEC)

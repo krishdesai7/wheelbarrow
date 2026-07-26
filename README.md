@@ -2,7 +2,7 @@
 
 Convert OS binaries into PyPI-installable Python wheels.
 
-A variety of tools ship only as prebuilt binaries and can therefore only be installed through a system package manager Wheelbarrow wraps such binaries in a correctly tagged wheel so it can be installed with Python's tooling:
+A variety of tools ship only as prebuilt binaries, or as standalone shell scripts, and can therefore only be installed through a system package manager Wheelbarrow wraps such executables in a correctly tagged wheel so they can be installed with Python's tooling:
 
 ```zsh
 uv tool install <tool-name>
@@ -61,7 +61,7 @@ Wheelbarrow comprises four modules, each available individually if one wants to 
 
 ### 1. Input inspection
 
-Wheelbarrow reads the binary's own headers, namely, ELF, Mach-O (including universal binaries) and PE/COFF, to recover the target OS, CPU architecture, libc flavour and/or macOS deployment target. Nothing is inferred from the machine one is running on, so cross-packaging works. For example, one can build a Linux wheel from a Mac.
+Wheelbarrow reads the binary's own headers, namely, ELF, Mach-O (including universal binaries) and PE/COFF, to recover the target OS, CPU architecture, libc flavour and/or macOS deployment target. Nothing is inferred from the machine one is running on, so cross-packaging works. For example, one can build a Linux wheel from a Mac. A `#!` script has no headers to read and no platform to detect (see [Shell scripts](#shell-scripts)).
 
 ```zsh
 $ wheelbarrow inspect ./rg-linux
@@ -104,7 +104,7 @@ In `direct` mode the staged file _becomes_ the installed command, so it is named
 `build.ProjectBuilder` drives the backend over PEP 517. Because the generated project looks pure-Python to the backend, the resulting wheel is `py3-none-any`; wheelbarrow then rewrites the archive to:
 
 - Set the platform tag in both the file name and `WHEEL`,
-- Set `Root-Is-Purelib: false`,
+- Set `Root-Is-Purelib` to match it: `false` for a real platform tag, `true` for `any`,
 - Force mode `0o755` on the embedded binary, independently of what the backend chose to store,
 - Rewrite uv's non-standard `WHEEL.json` when present, so it cannot contradict `WHEEL`,
 - Regenerate `RECORD` with fresh hashes.
@@ -133,8 +133,37 @@ Detected platforms map to tags as follows.
 | Mach-O x86_64                  | `macosx_10_12_x86_64`               | macOS (Intel)         |
 | Mach-O universal (both slices) | `macosx_<min>_0_universal2`         | macOS (Universal)     |
 | PE amd64 / arm64 / i386        | `win_amd64` / `win_arm64` / `win32` | Windows (PE/COFF)     |
+| `#!` script                    | `any`                               | Any (no machine code) |
 
 The macOS minimum comes from the binary's `LC_BUILD_VERSION` when present. It can be overridden with `--glibc 2.28`, `--macos-min 12.0`, or replaced entirely with `--platform-tag manylinux_2_28_aarch64`.
+
+## Shell scripts
+
+Not every tool is machine code. A file beginning with `#!` is recognised as a script and needs no special handling:
+
+```zsh
+$ wheelbarrow inspect ./greet.sh
+file         ./greet.sh
+format       script
+os           any
+arch         any
+interpreter  /usr/bin/env bash
+wheel tag    py3-none-any
+```
+
+Nothing in a script constrains where it can be installed, so it is tagged `any` and the wheel is marked `Root-Is-Purelib: true`. The file extension is dropped when deriving the default alias, so `greet.sh` installs as `greet`. Everything else — the executable bit, both launchers, `binary_path()`, `python -m` — behaves exactly as it does for a binary.
+
+The one caveat is that `any` is broader than the truth. A wheel tagged `any` installs on Windows too, where `/bin/sh` does not exist, and no wheel tag can express "needs a POSIX shell". Wheelbarrow says so when it builds one:
+
+```zsh
+$ wheelbarrow build ./greet.sh --name greet-bin --version 0.1.0
+note: greet.sh is a script run by /usr/bin/env bash, so the wheel is tagged any
+and will install anywhere, including where that interpreter does not exist. Pass
+--platform-tag to narrow it.
+built dist/greet_bin-0.1.0-py3-none-any.whl (3.7 KiB)
+```
+
+If the script is POSIX-only and that matters, restrict it explicitly with `--platform-tag manylinux_2_17_x86_64` or similar. A script without a `#!` line cannot be detected as one; pass `--platform-tag any` for those.
 
 ## Checking the project name
 

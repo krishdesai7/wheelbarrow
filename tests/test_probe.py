@@ -113,6 +113,55 @@ class TestPe:
             inspect_binary(path)
 
 
+class TestScript:
+    """A `#!` file is source text, so there is no architecture to detect."""
+
+    def test_a_script_is_not_tied_to_any_platform(self, shell_script) -> None:
+        info = inspect_binary(shell_script)
+        assert info.format == "script"
+        assert info.os == "any"
+        assert info.arch == "any"
+        assert info.is_script
+
+    @pytest.mark.parametrize(
+        ("first_line", "expected"),
+        [
+            (b"#!/bin/sh", "/bin/sh"),
+            (b"#!/usr/bin/env bash", "/usr/bin/env bash"),
+            (b"#!/bin/bash -eu", "/bin/bash -eu"),
+            (b"#! /bin/sh", "/bin/sh"),
+            (b"#!/usr/bin/env python3\r", "/usr/bin/env python3"),
+        ],
+    )
+    def test_the_interpreter_is_reported_verbatim(
+        self, write_binary, first_line, expected
+    ) -> None:
+        """Reported, not resolved: `env bash` is what the kernel will run."""
+        path = write_binary("tool", first_line + b"\nexit 0\n")
+        assert inspect_binary(path).interpreter == expected
+
+    def test_a_shebang_alone_is_enough(self, write_binary) -> None:
+        """No trailing newline, and nothing else in the file."""
+        path = write_binary("tool", b"#!/bin/sh")
+        assert inspect_binary(path).interpreter == "/bin/sh"
+
+    def test_undecodable_bytes_do_not_raise(self, write_binary) -> None:
+        """The encoding of a script is not ours to assume."""
+        path = write_binary("tool", b"#!/bin/\xff\xfesh\nexit 0\n")
+        assert inspect_binary(path).is_script
+
+    def test_a_long_first_line_is_truncated_like_the_kernel_does(
+        self, write_binary
+    ) -> None:
+        path = write_binary("tool", b"#!/bin/sh " + b"x" * 0x400 + b"\n")
+        interpreter = inspect_binary(path).interpreter
+        assert interpreter is not None
+        assert len(interpreter) < 0x100
+
+    def test_describe_names_the_interpreter(self, shell_script) -> None:
+        assert inspect_binary(shell_script).describe() == "script, interpreter=/bin/sh"
+
+
 class TestRejections:
     def test_missing_file(self, tmp_path) -> None:
         with pytest.raises(InspectionError, match="no such file"):
@@ -122,9 +171,9 @@ class TestRejections:
         with pytest.raises(InspectionError, match="expected a file"):
             inspect_binary(tmp_path)
 
-    def test_shell_script_gets_a_useful_message(self, write_binary) -> None:
-        path = write_binary("tool", b"#!/bin/sh\necho hi\n")
-        with pytest.raises(InspectionError, match="is a script"):
+    def test_shebang_without_an_interpreter(self, write_binary) -> None:
+        path = write_binary("tool", b"#!\necho hi\n")
+        with pytest.raises(InspectionError, match="not followed by an interpreter"):
             inspect_binary(path)
 
     def test_unrecognised_bytes(self, write_binary) -> None:

@@ -28,6 +28,16 @@ def windows(arch: str) -> BinaryInfo:
     return BinaryInfo(path=Path(), format="pe", os="windows", arch=arch)
 
 
+def script(interpreter: str = "/bin/sh") -> BinaryInfo:
+    return BinaryInfo(
+        path=Path(),
+        format="script",
+        os="any",
+        arch="any",
+        interpreter=interpreter,
+    )
+
+
 class TestLinux:
     @pytest.mark.parametrize(
         ("arch", "expected"),
@@ -93,6 +103,21 @@ class TestWindows:
     )
     def test_tags(self, arch, expected) -> None:
         assert platform_tag(windows(arch)) == expected
+
+
+class TestScript:
+    def test_a_script_gets_the_any_tag(self) -> None:
+        assert platform_tag(script()) == "any"
+
+    def test_the_interpreter_does_not_change_the_tag(self) -> None:
+        """There is no wheel tag for "needs bash", so none is invented."""
+        assert platform_tag(script("/usr/bin/env bash")) == "any"
+
+    def test_binary_options_are_ignored(self) -> None:
+        assert platform_tag(script(), glibc_version="2.28", macos_min=(12, 0)) == "any"
+
+    def test_the_full_tag_is_the_pure_python_one(self) -> None:
+        assert full_tag(platform_tag(script())) == "py3-none-any"
 
 
 def test_full_tag_composition() -> None:

@@ -5,7 +5,9 @@ as they can tell it is pure Python -- the executable is just package data. Two
 things must therefore be fixed up afterwards:
 
 1. The compatibility tag, in the wheel's file name and its `WHEEL` metadata,
-   so installers refuse to put a Linux binary on a Mac.
+   so installers refuse to put a Linux binary on a Mac. `Root-Is-Purelib`
+   follows from it: false for a real platform tag, since the package root then
+   holds machine code, and true for `any`, which only a script produces.
 2. The executable bit on the staged binary. Zip archives carry Unix modes in
    `external_attr`, and pip and uv honour them on extraction, but whether a
    backend preserves the source file's mode is backend-specific. Setting it
@@ -162,8 +164,20 @@ def _render_record(records: list[tuple[str, str, int]], record_name: str) -> byt
     return out.getvalue().encode("utf-8")
 
 
+def _is_pure(tag: str) -> bool:
+    """Whether `tag` claims no platform at all.
+
+    Only the platform component of the compatibility tag is consulted, and it
+    may be a dot-separated set. A wheel is pure exactly when every platform it
+    advertises is `any`, which for wheelbarrow means the packaged executable is
+    a script rather than machine code.
+    """
+    platform: str = tag.rsplit("-", 1)[-1]
+    return all(part == "any" for part in platform.split("."))
+
+
 def _rewrite_wheel_metadata(data: bytes, tag: str) -> bytes:
-    """Replace the `Tag:` lines and force `Root-Is-Purelib: false`."""
+    """Replace the `Tag:` lines and set `Root-Is-Purelib:` to match."""
     lines: list[str] = data.decode("utf-8").splitlines()
     kept: list[str] = [
         line
@@ -173,7 +187,8 @@ def _rewrite_wheel_metadata(data: bytes, tag: str) -> bytes:
     # Keep the trailing blank line convention of message-style metadata.
     while kept and not kept[-1].strip():
         kept.pop()
-    kept.extend(("Root-Is-Purelib: false", f"Tag: {tag}"))
+    purelib: str = "true" if _is_pure(tag) else "false"
+    kept.extend((f"Root-Is-Purelib: {purelib}", f"Tag: {tag}"))
     return ("\n".join(kept) + "\n").encode("utf-8")
 
 
@@ -193,7 +208,7 @@ def _rewrite_wheel_json(data: bytes, tag: str) -> bytes:
         return data
 
     payload["tags"] = [tag]
-    payload["root-is-purelib"] = False
+    payload["root-is-purelib"] = _is_pure(tag)
     return json.dumps(payload, separators=(",", ":")).encode("utf-8")
 
 
