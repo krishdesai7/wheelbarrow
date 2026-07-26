@@ -9,7 +9,7 @@ import io
 import json
 import shutil
 import stat
-import subprocess
+import subprocess  # noqa: S404 - integration tests intentionally execute built files
 import sys
 import zipfile
 from typing import TYPE_CHECKING
@@ -293,7 +293,7 @@ class TestInstalledWheelRuns:
         command = install_command(result.wheel, target)
         if command is None:
             pytest.skip("neither pip nor uv is available to install the wheel")
-        subprocess.run(command, check=True, capture_output=True)
+        subprocess.run(command, check=True, capture_output=True)  # noqa: S603
 
         # Direct-mode wheels put the binary in `.data/scripts`, which installers
         # unpack into a `bin/` beside the packages under `--target`.
@@ -312,7 +312,7 @@ class TestInstalledWheelRuns:
 
     def test_running_it_directly_works(self, installed):
         _, executable = installed
-        completed = subprocess.run(
+        completed = subprocess.run(  # noqa: S603
             [str(executable), "world"], capture_output=True, text=True, check=False
         )
         assert completed.stdout.strip() == "hello world"

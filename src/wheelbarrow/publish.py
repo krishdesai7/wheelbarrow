@@ -2,7 +2,7 @@
 
 import os
 import shutil
-import subprocess
+import subprocess  # noqa: S404 - publishing intentionally invokes uv without a shell
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -72,7 +72,7 @@ def run_publish(plan: PublishPlan, *, token: str | None = None) -> None:
         env["UV_PUBLISH_TOKEN"] = token
 
     try:
-        completed: subprocess.CompletedProcess[bytes] = subprocess.run(
+        completed: subprocess.CompletedProcess[bytes] = subprocess.run(  # noqa: S603
             plan.argv, env=env, check=False
         )
     except OSError as exc:  # pragma: no cover - uv vanished between check and run

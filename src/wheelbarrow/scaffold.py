@@ -248,7 +248,8 @@ def stage_binary(source: Path, destination: Path) -> Path:
     return destination
 
 
-def render_pyproject(spec: PackageSpec) -> str:
+def _render_project_extra(spec: PackageSpec) -> str:
+    """Render optional fields in the generated ``[project]`` table."""
     extra: list[str] = []
     if spec.licence:
         extra.append(f"licence = {toml_str(spec.licence)}")
@@ -266,7 +267,10 @@ def render_pyproject(spec: PackageSpec) -> str:
         extra.append(f"keywords = {toml_array(spec.keywords)}")
     if spec.classifiers:
         extra.append(f"classifiers = {toml_array(spec.classifiers)}")
+    return ("\n".join(extra) + "\n") if extra else ""
 
+
+def render_pyproject(spec: PackageSpec) -> str:
     # In direct mode the binary itself lands in the scripts directory, so a
     # console script of the same name would overwrite it during install.
     scripts_table = ""
@@ -293,7 +297,7 @@ def render_pyproject(spec: PackageSpec) -> str:
         version=toml_str(spec.version),
         description=toml_str(spec.description),
         requires_python=toml_str(spec.requires_python),
-        project_extra=("\n".join(extra) + "\n") if extra else "",
+        project_extra=_render_project_extra(spec),
         scripts_table=scripts_table,
         urls_table=urls_table,
         data_table=data_table,

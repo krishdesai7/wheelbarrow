@@ -24,7 +24,10 @@ class TestPlanPublish:
 
     def test_token_never_reaches_argv(self, wheel):
         """Tokens go through the environment so they cannot leak into `ps`."""
-        plan = plan_publish([wheel], token="pypi-AgEIcHlwaS5vcmc-secret")
+        plan = plan_publish(
+            [wheel],
+            token="pypi-not-a-real-secret",  # noqa: S106
+        )
         assert plan.uses_token is True
         assert not any("secret" in arg for arg in plan.argv)
 
