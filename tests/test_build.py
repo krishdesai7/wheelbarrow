@@ -255,8 +255,8 @@ def install_command(wheel: Path, target: Path) -> list[str] | None:
     )
     if probe.returncode == 0:
         base = [sys.executable, "-m", "pip", "install"]
-    elif shutil.which("uv"):
-        base = [shutil.which("uv"), "pip", "install", "--python", sys.executable]
+    elif (uv := shutil.which("uv")) is not None:
+        base = [uv, "pip", "install", "--python", sys.executable]
     else:
         return None
     return [*base, "--no-deps", "--target", str(target), str(wheel)]
