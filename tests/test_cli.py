@@ -1,5 +1,7 @@
 """CLI surface: how help is reached, and when an error is shown instead."""
 
+import re
+
 import pytest
 from typer.testing import CliRunner, Result
 
@@ -7,6 +9,7 @@ from wheelbarrow.cli import app
 from wheelbarrow.pypi import NameStatus
 
 runner = CliRunner()
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 #: Every command the app exposes, `help` included -- it documents itself.
 COMMANDS = ["inspect", "build", "publish", "help"]
@@ -19,7 +22,11 @@ def run(*args: str) -> Result:
 
 def everything_written(result: Result) -> str:
     """Both streams, since rich sends errors to stderr and help to stdout."""
-    return result.output + (result.stderr or "")
+    return ANSI_ESCAPE_RE.sub("", result.output + (result.stderr or ""))
+
+
+def plain_output(result: Result) -> str:
+    return ANSI_ESCAPE_RE.sub("", result.output)
 
 
 class TestBareSubcommandShowsHelp:
@@ -28,8 +35,9 @@ class TestBareSubcommandShowsHelp:
     @pytest.mark.parametrize("command", ["inspect", "build", "publish"])
     def test_no_arguments_prints_the_commands_help(self, command) -> None:
         result = run(command)
-        assert f"Usage: wheelbarrow {command}" in result.output
-        assert "--help" in result.output
+        rendered = plain_output(result)
+        assert f"Usage: wheelbarrow {command}" in rendered
+        assert "--help" in rendered
 
     @pytest.mark.parametrize("command", ["inspect", "build", "publish"])
     def test_no_arguments_matches_explicit_help(self, command) -> None:
@@ -49,7 +57,7 @@ class TestHelpCommand:
     def test_usage_line_is_fully_qualified(self, command) -> None:
         # The sub-context is parented to the root, so the usage line names the
         # program too rather than starting at the subcommand.
-        assert f"Usage: wheelbarrow {command}" in run("help", command).output
+        assert f"Usage: wheelbarrow {command}" in plain_output(run("help", command))
 
     def test_without_an_argument_describes_the_app(self) -> None:
         assert run("help").output == run("--help").output
