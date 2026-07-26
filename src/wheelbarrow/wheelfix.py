@@ -19,6 +19,7 @@ import base64
 import csv
 import hashlib
 import io
+import json
 import re
 import zipfile
 from dataclasses import dataclass
@@ -71,6 +72,7 @@ def retag_wheel(
 
     record_name: str = f"{dist_info}/RECORD"
     wheel_meta_name: str = f"{dist_info}/WHEEL"
+    wheel_json_name: str = f"{dist_info}/WHEEL.json"
 
     buffer = io.BytesIO()
     records: list[tuple[str, str, int]] = []
@@ -93,6 +95,11 @@ def retag_wheel(
                 if item.filename == wheel_meta_name:
                     data = _rewrite_wheel_metadata(data, tag)
                     seen_wheel_meta = True
+                elif item.filename == wheel_json_name:
+                    # uv_build writes this alongside WHEEL as a non-standard
+                    # convenience copy. Leaving it stale would ship a wheel
+                    # whose two metadata files disagree about the tag.
+                    data = _rewrite_wheel_json(data, tag)
 
                 mode: Mode = (
                     Mode.EXEC if item.filename in executable_paths else Mode.DATA
@@ -169,6 +176,26 @@ def _rewrite_wheel_metadata(data: bytes, tag: str) -> bytes:
     kept.append("Root-Is-Purelib: false")
     kept.append(f"Tag: {tag}")
     return ("\n".join(kept) + "\n").encode("utf-8")
+
+
+def _rewrite_wheel_json(data: bytes, tag: str) -> bytes:
+    """Keep uv_build's `WHEEL.json` in step with the rewritten `WHEEL`.
+
+    The file is a uv extension rather than part of the wheel specification, so
+    unknown keys are preserved and only the two that describe placement and
+    compatibility are replaced.
+    """
+    try:
+        payload = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        # Not something we understand; leave it exactly as the backend wrote it.
+        return data
+    if not isinstance(payload, dict):
+        return data
+
+    payload["tags"] = [tag]
+    payload["root-is-purelib"] = False
+    return json.dumps(payload, separators=(",", ":")).encode("utf-8")
 
 
 _WHEEL_NAME_RE: Final[re.Pattern[str]] = re.compile(

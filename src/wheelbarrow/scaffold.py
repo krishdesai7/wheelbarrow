@@ -1,7 +1,22 @@
 """Dynamic project templating and asset staging.
 
 Given an inspected binary plus package metadata, `scaffold_project` writes a
-complete, buildable Python project to disk:
+complete, buildable Python project to disk. The layout depends on the launcher.
+
+`Launcher.DIRECT` stages the binary outside the module, so uv_build maps it
+into the wheel's `.data/scripts/` directory and nothing sweeps it up a second
+time as package data:
+
+    <root>/
+      pyproject.toml
+      README.md
+      scripts/<alias>       <- staged executable, mode 0o755, one per alias
+      src/<module>/
+        __init__.py         <- binary_path() locates the installed script
+        __main__.py
+
+`Launcher.SHIM` keeps the binary inside the package and exposes console script
+entry points that `execv` it:
 
     <root>/
       pyproject.toml
@@ -9,13 +24,14 @@ complete, buildable Python project to disk:
       src/<module>/
         __init__.py
         __main__.py
-        bin/<binary>      <- the staged executable, mode 0o755
+        bin/<binary>        <- staged executable, mode 0o755
 """
 
 import re
 import shutil
 import stat
 from dataclasses import dataclass, field
+from enum import StrEnum, auto
 from pathlib import Path
 from typing import Final
 
@@ -24,13 +40,29 @@ from packaging.version import InvalidVersion, Version
 
 from .errors import MetadataError
 from .templates import (
-    INIT,
+    DATA_TABLE,
+    INIT_DIRECT,
+    INIT_SHIM,
     MAIN,
     PYPROJECT,
     README,
     toml_array,
     toml_str,
 )
+
+#: Directory, relative to the project root, holding binaries destined for
+#: `.data/scripts/`. Deliberately outside `src/` so it is not package data.
+SCRIPTS_DIR: Final[str] = "scripts"
+
+
+class Launcher(StrEnum):
+    """How the packaged binary is exposed on `PATH`."""
+
+    #: Binary installed straight into the environment's scripts directory.
+    #: No Python runs on invocation.
+    DIRECT = auto()
+    #: Console script entry point that `execv`s a binary inside the package.
+    SHIM = auto()
 
 
 @dataclass
@@ -43,6 +75,7 @@ class PackageSpec:
     binary_name: str  # file name inside bin/, e.g. "rg"
     aliases: list[str]  # console scripts to expose
     platform_tag: str
+    launcher: Launcher = Launcher.DIRECT
     description: str = ""
     requires_python: str = ">=3.8"
     license: str | None = None
@@ -50,6 +83,17 @@ class PackageSpec:
     keywords: list[str] = field(default_factory=list)
     classifiers: list[str] = field(default_factory=list)
     urls: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def installed_name(self) -> str:
+        """File name the executable carries once installed.
+
+        In shim mode it keeps its original name inside the package. In direct
+        mode it *becomes* the command, so it is named after the first alias.
+        """
+        if self.launcher is Launcher.SHIM:
+            return self.binary_name
+        return self.aliases[0]
 
 
 _ALIAS_RE: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9._-]+")
@@ -62,6 +106,7 @@ def make_spec(
     binary_name: str,
     platform_tag: str,
     aliases: list[str] | None = None,
+    launcher: Launcher = Launcher.DIRECT,
     description: str = "",
     requires_python: str = ">=3.8",
     license: str | None = None,
@@ -98,6 +143,7 @@ def make_spec(
         binary_name=binary_name,
         aliases=resolved_aliases,
         platform_tag=platform_tag,
+        launcher=launcher,
         description=description,
         requires_python=requires_python,
         license=license,
@@ -150,16 +196,37 @@ def scaffold_project(spec: PackageSpec, binary: Path, root: Path) -> Path:
     """
     root = Path(root)
     pkg_dir: Path = root / "src" / spec.module
-    bin_dir: Path = pkg_dir / "bin"
-    bin_dir.mkdir(parents=True, exist_ok=True)
+    pkg_dir.mkdir(parents=True, exist_ok=True)
 
     (root / "pyproject.toml").write_text(render_pyproject(spec), encoding="utf-8")
     (root / "README.md").write_text(render_readme(spec), encoding="utf-8")
     (pkg_dir / "__init__.py").write_text(render_init(spec), encoding="utf-8")
     (pkg_dir / "__main__.py").write_text(render_main(spec), encoding="utf-8")
 
-    stage_binary(binary, bin_dir / spec.binary_name)
+    for destination in staged_paths(spec, root):
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        stage_binary(binary, destination)
     return root
+
+
+def staged_paths(spec: PackageSpec, root: Path) -> list[Path]:
+    """Where the executable is written on disk, before the build runs.
+
+    In direct mode the installed command is named after the file in
+    `.data/scripts/`, so each alias needs its own copy.
+    """
+    root = Path(root)
+    if spec.launcher is Launcher.SHIM:
+        return [root / "src" / spec.module / "bin" / spec.binary_name]
+    return [root / SCRIPTS_DIR / alias for alias in spec.aliases]
+
+
+def archive_executables(spec: PackageSpec) -> set[str]:
+    """Archive members that must carry mode 0o755 in the finished wheel."""
+    if spec.launcher is Launcher.SHIM:
+        return {f"{spec.module}/bin/{spec.binary_name}"}
+    data_dir = f"{spec.dist_name.replace('-', '_')}-{spec.version}.data/scripts"
+    return {f"{data_dir}/{alias}" for alias in spec.aliases}
 
 
 def stage_binary(source: Path, destination: Path) -> Path:
@@ -199,17 +266,24 @@ def render_pyproject(spec: PackageSpec) -> str:
     if spec.classifiers:
         extra.append(f"classifiers = {toml_array(spec.classifiers)}")
 
-    scripts: str = "\n".join(
-        f"{toml_str(alias)} = {toml_str(spec.module + '.__main__:main')}"
-        for alias in spec.aliases
-    )
+    # In direct mode the binary itself lands in the scripts directory, so a
+    # console script of the same name would overwrite it during install.
+    scripts_table = ""
+    if spec.launcher is Launcher.SHIM:
+        rows = "\n".join(
+            f"{toml_str(alias)} = {toml_str(spec.module + '.__main__:main')}"
+            for alias in spec.aliases
+        )
+        scripts_table = f"\n[project.scripts]\n{rows}\n"
 
     urls_table = ""
     if spec.urls:
-        rows: str = "\n".join(
-            f"{toml_str(k)} = {toml_str(v)}" for k, v in spec.urls.items()
-        )
-        urls_table: str = f"\n[project.urls]\n{rows}\n"
+        rows = "\n".join(f"{toml_str(k)} = {toml_str(v)}" for k, v in spec.urls.items())
+        urls_table = f"\n[project.urls]\n{rows}\n"
+
+    data_table = ""
+    if spec.launcher is Launcher.DIRECT:
+        data_table = DATA_TABLE.substitute(scripts_dir=SCRIPTS_DIR)
 
     return PYPROJECT.substitute(
         name=toml_str(spec.dist_name),
@@ -217,24 +291,32 @@ def render_pyproject(spec: PackageSpec) -> str:
         description=toml_str(spec.description),
         requires_python=toml_str(spec.requires_python),
         project_extra=("\n".join(extra) + "\n") if extra else "",
-        scripts=scripts,
+        scripts_table=scripts_table,
         urls_table=urls_table,
+        data_table=data_table,
         module=spec.module,
     )
 
 
 def render_init(spec: PackageSpec) -> str:
-    return INIT.substitute(
+    template = INIT_SHIM if spec.launcher is Launcher.SHIM else INIT_DIRECT
+    imports = (
+        "from pathlib import Path\n"
+        if spec.launcher is Launcher.SHIM
+        else "import sysconfig\nfrom pathlib import Path\n"
+    )
+    return template.substitute(
         dist_name=spec.dist_name,
-        binary_name=spec.binary_name,
+        binary_name=spec.installed_name,
         version=spec.version,
+        imports=imports,
     )
 
 
 def render_main(spec: PackageSpec) -> str:
     return MAIN.substitute(
         dist_name=spec.dist_name,
-        binary_name=spec.binary_name,
+        binary_name=spec.installed_name,
     )
 
 
@@ -246,4 +328,5 @@ def render_readme(spec: PackageSpec) -> str:
         module=spec.module,
         alias_list=alias_list,
         platform_tag=spec.platform_tag,
+        launcher=spec.launcher.value,
     )

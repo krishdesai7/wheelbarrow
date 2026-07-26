@@ -9,7 +9,15 @@ import tomllib
 import pytest
 
 from wheelbarrow.errors import MetadataError
-from wheelbarrow.scaffold import make_spec, scaffold_project, stage_binary
+from wheelbarrow.scaffold import (
+    SCRIPTS_DIR,
+    Launcher,
+    archive_executables,
+    make_spec,
+    scaffold_project,
+    stage_binary,
+    staged_paths,
+)
 
 
 def spec(**overrides):
@@ -100,47 +108,51 @@ class TestStaging:
         assert stat.S_IMODE(destination.stat().st_mode) == 0o755
 
 
-class TestProjectRendering:
-    @pytest.fixture
-    def project(self, tmp_path, elf_binary):
-        root = tmp_path / "project"
-        root.mkdir()
-        s = spec(
-            description='A tool with "quotes" and \\ backslashes',
-            license="MIT",
-            author="Krish Desai",
-            author_email="krish@example.com",
-            homepage="https://example.com",
-            keywords=["search", "grep"],
-            aliases=["rg", "ripgrep"],
-        )
-        scaffold_project(s, elf_binary, root)
-        return root, s
+def build_project(tmp_path, binary, **overrides):
+    root = tmp_path / "project"
+    root.mkdir(exist_ok=True)
+    s = spec(
+        description='A tool with "quotes" and \\ backslashes',
+        license="MIT",
+        author="Krish Desai",
+        author_email="krish@example.com",
+        homepage="https://example.com",
+        keywords=["search", "grep"],
+        **overrides,
+    )
+    scaffold_project(s, binary, root)
+    return root, s
 
-    def test_layout(self, project):
+
+class TestProjectRenderingCommon:
+    """Behaviour that must hold whichever launcher is selected."""
+
+    @pytest.fixture(params=[Launcher.DIRECT, Launcher.SHIM])
+    def project(self, request, tmp_path, elf_binary):
+        return build_project(tmp_path, elf_binary, launcher=request.param)
+
+    def test_core_files_exist(self, project):
         root, s = project
         assert (root / "pyproject.toml").is_file()
         assert (root / "README.md").is_file()
         assert (root / "src" / s.module / "__init__.py").is_file()
         assert (root / "src" / s.module / "__main__.py").is_file()
-        assert (root / "src" / s.module / "bin" / "rg").is_file()
 
-    def test_pyproject_is_valid_toml(self, project):
+    def test_uses_the_uv_build_backend(self, project):
         root, _ = project
         data = tomllib.loads((root / "pyproject.toml").read_text())
+        assert data["build-system"]["build-backend"] == "uv_build"
+        assert data["build-system"]["requires"] == ["uv_build>=0.11.30,<0.12"]
+        assert data["tool"]["uv"]["build-backend"]["module-name"] == "ripgrep_bin"
+        assert data["tool"]["uv"]["build-backend"]["module-root"] == "src"
 
+    def test_common_metadata(self, project):
+        root, _ = project
+        data = tomllib.loads((root / "pyproject.toml").read_text())
         assert data["project"]["name"] == "ripgrep-bin"
         assert data["project"]["version"] == "15.2.0"
-        assert data["build-system"]["build-backend"] == "hatchling.build"
-        assert data["project"]["scripts"] == {
-            "rg": "ripgrep_bin.__main__:main",
-            "ripgrep": "ripgrep_bin.__main__:main",
-        }
         assert data["project"]["urls"]["Homepage"] == "https://example.com"
         assert data["project"]["keywords"] == ["search", "grep"]
-        assert data["tool"]["hatch"]["build"]["targets"]["wheel"]["packages"] == [
-            "src/ripgrep_bin"
-        ]
 
     def test_metadata_strings_are_escaped(self, project):
         """A description containing quotes must not corrupt the TOML."""
@@ -154,11 +166,101 @@ class TestProjectRendering:
         root, _ = project
         assert compileall.compile_dir(str(root / "src"), quiet=2, force=True)
 
-    def test_staged_binary_is_executable(self, project):
+    def test_staged_binaries_are_executable(self, project):
         root, s = project
-        staged = root / "src" / s.module / "bin" / "rg"
-        assert stat.S_IMODE(staged.stat().st_mode) == 0o755
+        staged = staged_paths(s, root)
+        assert staged
+        for path in staged:
+            assert path.is_file()
+            assert stat.S_IMODE(path.stat().st_mode) == 0o755
 
     def test_readme_mentions_the_install_command(self, project):
         root, _ = project
         assert "uv tool install ripgrep-bin" in (root / "README.md").read_text()
+
+
+class TestDirectLauncher:
+    @pytest.fixture
+    def project(self, tmp_path, elf_binary):
+        return build_project(tmp_path, elf_binary, aliases=["rg", "ripgrep"])
+
+    def test_binary_is_staged_outside_the_module(self, project):
+        """Inside `src/` it would also be swept in as package data."""
+        root, s = project
+        assert (root / SCRIPTS_DIR / "rg").is_file()
+        assert not (root / "src" / s.module / "bin").exists()
+
+    def test_one_copy_per_alias_named_after_the_alias(self, project):
+        root, s = project
+        assert staged_paths(s, root) == [
+            root / SCRIPTS_DIR / "rg",
+            root / SCRIPTS_DIR / "ripgrep",
+        ]
+
+    def test_no_console_scripts(self, project):
+        """A console script would overwrite the binary of the same name."""
+        root, _ = project
+        data = tomllib.loads((root / "pyproject.toml").read_text())
+        assert "scripts" not in data["project"]
+
+    def test_data_scripts_mapping(self, project):
+        root, _ = project
+        data = tomllib.loads((root / "pyproject.toml").read_text())
+        assert data["tool"]["uv"]["build-backend"]["data"]["scripts"] == SCRIPTS_DIR
+
+    def test_archive_paths_target_the_data_directory(self, project):
+        _, s = project
+        assert archive_executables(s) == {
+            "ripgrep_bin-15.2.0.data/scripts/rg",
+            "ripgrep_bin-15.2.0.data/scripts/ripgrep",
+        }
+
+    def test_installed_name_follows_the_first_alias(self):
+        s = spec(binary_name="fd-v10", aliases=["fd"])
+        assert s.installed_name == "fd"
+
+    def test_locator_prefers_paths_beside_the_package(self, project):
+        """`sysconfig` is wrong under `pip install --target`, so it comes last."""
+        root, s = project
+        source = (root / "src" / s.module / "__init__.py").read_text()
+        beside = source.index('beside / "bin"')
+        via_sysconfig = source.index("Path(scripts) / BINARY_NAME")
+        assert beside < via_sysconfig
+
+
+class TestShimLauncher:
+    @pytest.fixture
+    def project(self, tmp_path, elf_binary):
+        return build_project(
+            tmp_path, elf_binary, launcher=Launcher.SHIM, aliases=["rg", "ripgrep"]
+        )
+
+    def test_binary_is_staged_inside_the_package(self, project):
+        root, s = project
+        assert (root / "src" / s.module / "bin" / "rg").is_file()
+        assert not (root / SCRIPTS_DIR).exists()
+
+    def test_one_shared_copy_regardless_of_alias_count(self, project):
+        root, s = project
+        assert staged_paths(s, root) == [root / "src" / s.module / "bin" / "rg"]
+
+    def test_console_scripts_cover_every_alias(self, project):
+        root, _ = project
+        data = tomllib.loads((root / "pyproject.toml").read_text())
+        assert data["project"]["scripts"] == {
+            "rg": "ripgrep_bin.__main__:main",
+            "ripgrep": "ripgrep_bin.__main__:main",
+        }
+
+    def test_no_data_scripts_mapping(self, project):
+        root, _ = project
+        data = tomllib.loads((root / "pyproject.toml").read_text())
+        assert "data" not in data["tool"]["uv"]["build-backend"]
+
+    def test_archive_path_is_inside_the_package(self, project):
+        _, s = project
+        assert archive_executables(s) == {"ripgrep_bin/bin/rg"}
+
+    def test_installed_name_keeps_the_source_file_name(self):
+        s = spec(binary_name="fd-v10", aliases=["fd"], launcher=Launcher.SHIM)
+        assert s.installed_name == "fd-v10"

@@ -12,7 +12,7 @@ from .builder import BuildResult, build_package
 from .errors import WheelbarrowError
 from .probe import BinaryInfo, inspect_binary
 from .publish import PublishPlan, plan_publish, run_publish
-from .scaffold import PackageSpec, make_spec
+from .scaffold import Launcher, PackageSpec, make_spec
 from .tags import full_tag, platform_tag
 
 app = typer.Typer(
@@ -156,6 +156,15 @@ def build_command(
         bool,
         typer.Option("--universal2", help="Tag a fat Mach-O binary as `universal2`."),
     ] = False,
+    launcher: Annotated[
+        Launcher,
+        typer.Option(
+            "--launcher",
+            help="**direct** installs the binary straight onto `PATH` "
+            "(no Python startup cost). **shim** exposes a console script that "
+            "`execv`s a binary kept inside the package.",
+        ),
+    ] = Launcher.DIRECT,
     keep_project: Annotated[
         Path | None,
         typer.Option(
@@ -196,6 +205,7 @@ def build_command(
             binary_name=binary.name,
             platform_tag=tag,
             aliases=list(alias) if alias else None,
+            launcher=launcher,
             description=description,
             requires_python=requires_python,
             license=license_,
@@ -219,6 +229,14 @@ def build_command(
                     f"tag; the other slices will not be advertised."
                 )
 
+        if spec.launcher is Launcher.DIRECT and len(spec.aliases) > 1:
+            # Each alias *is* the installed file, so each needs its own copy.
+            console.print(
+                f"[yellow]note:[/] {len(spec.aliases)} aliases in direct mode "
+                f"means {len(spec.aliases)} copies of the binary in the wheel. "
+                f"Use --launcher shim to share one copy."
+            )
+
         result: BuildResult = build_package(
             binary,
             spec,
@@ -235,6 +253,7 @@ def build_command(
         f"[dim]({_human_size(result.wheel.stat().st_size)})[/]"
     )
     console.print(f"[dim]  tag      [/] {result.tag}")
+    console.print(f"[dim]  launcher [/] {spec.launcher.value}")
     console.print(f"[dim]  scripts  [/] {', '.join(spec.aliases)}")
     if result.project_dir:
         console.print(f"[dim]  project  [/] {result.project_dir}")

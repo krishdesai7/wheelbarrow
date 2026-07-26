@@ -42,6 +42,7 @@ Once installed you can run Wheelbarrow from the command line:
 $ wheelbarrow build ./<binary> --name <tool-name> --version <version> --alias <alias>
 built dist/<tool-name>-<version>-py3-none-<platform-tag>.whl (<size>)
   tag       <platform-tag>
+  launcher  direct
   scripts   <alias>
 ```
 
@@ -76,21 +77,27 @@ wheel tag  py3-none-manylinux_2_17_x86_64
 
 A complete project is rendered from `string.Template` into a temporary directory:
 
+The layout depends on the launcher (see [The launcher](#the-launcher)). With the default `direct` launcher the binary is staged outside the module, so it is not also swept in as package data:
+
 ```zsh
 $ tree
-pyproject.toml              # Hatchling backend, console scripts, metadata
-README.md                   # The README for the tool
-src/                        # The source code for the tool
+pyproject.toml            # uv_build backend, data mapping, metadata
+README.md                 # The README for the tool
+scripts/                  # Staged outside src/ so it is not package data
+└── <alias>               # The staged executable
+src/                      # The source code for the tool
 └── <tool-name>/
-    ├── __init__.py    # Exposes __version__ and binary_path()
-    ├── __main__.py    # The launcher
-    └── bin/<binary>   # The staged executable
-tests/                 # Tests for the tool
+    ├── __init__.py       # Exposes __version__ and binary_path()
+    └── __main__.py       # Supports `python -m <tool-name>`
 ```
+
+With `--launcher shim` the binary lives inside the package at `<tool-name>/bin/<binary>` instead, and `pyproject.toml` gains a `[project.scripts]` entry point per alias.
 
 ### 3. Asset staging
 
-The binary is copied into the package's `bin/` directory and its mode is set explicitly to `0o755`. Binaries extracted from release archives frequently arrive as `0o644`, so the executable bit is set rather than inherited.
+The binary is copied into place and its mode is set explicitly to `0o755`. Binaries extracted from release archives frequently arrive as `0o644`, so the executable bit is set rather than inherited.
+
+In `direct` mode the staged file *becomes* the installed command, so it is named after the alias rather than the source file, and each alias needs its own copy. In `shim` mode a single copy is shared by every alias.
 
 ### 4. Wheel compilation and tagging
 
@@ -99,6 +106,7 @@ The binary is copied into the package's `bin/` directory and its mode is set exp
 - Set the platform tag in both the file name and `WHEEL`,
 - Set `Root-Is-Purelib: false`,
 - Force mode `0o755` on the embedded binary, independently of what the backend chose to store,
+- Rewrite uv's non-standard `WHEEL.json` when present, so it cannot contradict `WHEEL`,
 - Regenerate `RECORD` with fresh hashes.
 
 Entries are written with a fixed timestamp, so identical inputs produce byte-identical wheels.
@@ -153,10 +161,33 @@ wheelbarrow publish dist/<tool-name>_bin-<version>-py3-none-<platform-tag>.whl
 
 ## The launcher
 
-The console script is a Python entry point that `execv`s the bundled binary. Because it is an `exec` rather than a subprocess, signals, exit codes, stdin and terminal control all pass through to the real tool untouched. On Windows,
-which has no real `exec`, it waits on a child process and forwards the exit code.
+Two launchers are available via `--launcher`. Both keep `binary_path()` and `python -m <tool-name>` working.
 
-The binary is also reachable from Python:
+### `direct` (default)
+
+The binary is mapped into the wheel's `.data/scripts/` directory, so installers place the real executable straight onto `PATH`. No Python runs on invocation, and the installed command is indistinguishable from the binary itself.
+
+There is deliberately no `[project.scripts]` entry in this mode: a console script of the same name is written to the same directory and would silently overwrite the binary at install time.
+
+### `shim`
+
+The binary lives inside the package, and a console script entry point `execv`s it. Because it is an `exec` rather than a subprocess, signals, exit codes, stdin and terminal control all pass through to the real tool untouched. On Windows, which has no real `exec`, it waits on a child process and forwards the exit code.
+
+This costs one Python interpreter startup per invocation, but a single copy of the binary serves every alias.
+
+### Which to use
+
+Measured on an Apple Silicon Mac, invoking `rg --version` 60 times and taking the median:
+
+| Launcher              | Time     |
+| --------------------- | -------- |
+| `direct`              | 4.3 ms   |
+| `shim`                | 29.3 ms  |
+| Native (Homebrew `rg`) | 4.3 ms  |
+
+`direct` is exactly as fast as the binary installed by a system package manager, which is the point of the tool. Prefer `shim` only when a package exposes several aliases for one binary and wheel size matters, since `direct` needs a copy per alias.
+
+Either way the binary is reachable from Python:
 
 ```python
 from <tool-name>_bin import binary_path
@@ -164,9 +195,7 @@ from <tool-name>_bin import binary_path
 subprocess.run([str(binary_path()), "--json", "pattern"])
 ```
 
-The tradeoff is one Python interpreter startup per invocation, measured at about 24 ms on an Apple Silicon Mac (14 ms direct vs 39 ms wrapped). For an interactive tool use, this is unnoticeable; but can be significant for invocations in a tight shell loop.
-
-Future versions may implement functionality to place the binary in the wheel's `.data/scripts/` directory, at the cost of the `binary_path()` API and the `python -m` entry point.
+In `direct` mode `binary_path()` locates the installed file rather than computing it, checking paths beside the package before consulting `sysconfig`. That ordering matters under `pip install --target`, where `sysconfig` describes the running interpreter instead of the install target and could otherwise return an unrelated tool of the same name.
 
 ## Command reference
 
@@ -186,6 +215,7 @@ wheelbarrow build BINARY --name NAME --version VERSION
         --glibc VERSION       manylinux baseline, e.g. 2.28
         --macos-min VERSION   e.g. 12.0
         --universal2          tag a fat Mach-O for both architectures
+        --launcher MODE       direct (default) or shim
         --keep-project DIR    keep the generated project for inspection
         --isolated            build in an isolated PEP 517 environment
     -v, --verbose             show build backend output
@@ -202,6 +232,8 @@ wheelbarrow publish WHEELS...
 - Wheelbarrow only repackages binaries. It never compiles or modifies them.
 - Dynamically linked Linux binaries are tagged `manylinux_2_17` by default. That is a claim about glibc compatibility that Wheelbarrow cannot verify. If the binary needs a newer glibc version, pass `--glibc`. Statically linked binaries, the most common case for Rust and Go tools, are unaffected.
 - One wheel carries one binary for one platform. Tools that need companion files (man pages, completions, shared libraries) are out of scope.
+- Generated projects use the `uv_build` backend, which is pinned to a narrow range (`>=0.11.30,<0.12`). A project kept with `--keep-project` and rebuilt much later may need that pin refreshed.
+- In `direct` mode each alias is a separate copy of the binary in the wheel. Wheelbarrow warns when more than one alias is requested.
 - Check the upstream license before republishing someone else's binary.
 
 ## Development

@@ -10,17 +10,19 @@ import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from build import BuildBackendException, BuildException, ProjectBuilder
 from build.env import DefaultIsolatedEnv
-from pyproject_hooks import (
-    SubprocessRunner,
-    default_subprocess_runner,
-    quiet_subprocess_runner,
-)
+from pyproject_hooks import default_subprocess_runner, quiet_subprocess_runner
+
+if TYPE_CHECKING:
+    # pyproject_hooks exports this Protocol for typing only; it does not exist
+    # at runtime, so importing it unguarded raises ImportError.
+    from pyproject_hooks import SubprocessRunner
 
 from .errors import BuildError
-from .scaffold import PackageSpec, scaffold_project
+from .scaffold import PackageSpec, archive_executables, scaffold_project
 from .tags import full_tag
 from .wheelfix import RetagResult, retag_wheel
 
@@ -58,7 +60,7 @@ def build_wheel(
                 env.install(builder.get_requires_for_build("wheel"))
                 built: str = builder.build("wheel", str(output_dir))
         else:
-            # hatchling is a direct dependency of wheelbarrow, so the backend
+            # uv_build is a direct dependency of wheelbarrow, so the backend
             # is already importable and we can skip building a venv.
             builder = ProjectBuilder(project_root, runner=runner)
             built = builder.build("wheel", str(output_dir))
@@ -108,7 +110,7 @@ def build_package(
     result: RetagResult = retag_wheel(
         raw_wheel,
         tag=tag,
-        executable_paths={f"{spec.module}/bin/{spec.binary_name}"},
+        executable_paths=archive_executables(spec),
     )
     if not result.executables:  # pragma: no cover - defensive
         raise BuildError("no executable entries were marked in the wheel")

@@ -16,9 +16,11 @@ license-files = ["LICENSE-APACHE", "LICENSE-MIT"]
 classifiers = []
 dependencies = [
     "build>=1.2",
-    "hatchling>=1.27",
     "packaging>=24.0",
     "typer>=0.27.0",
+    # The backend for generated projects. Depending on it directly lets the
+    # default build path skip PEP 517 isolation and run in-process.
+    "uv_build>=0.11.30,<0.12",
 ]
 
 [project.scripts]
