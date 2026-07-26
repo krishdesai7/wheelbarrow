@@ -97,7 +97,7 @@ With `--launcher shim` the binary lives inside the package at `<tool-name>/bin/<
 
 The binary is copied into place and its mode is set explicitly to `0o755`. Binaries extracted from release archives frequently arrive as `0o644`, so the executable bit is set rather than inherited.
 
-In `direct` mode the staged file *becomes* the installed command, so it is named after the alias rather than the source file, and each alias needs its own copy. In `shim` mode a single copy is shared by every alias.
+In `direct` mode the staged file _becomes_ the installed command, so it is named after the alias rather than the source file, and each alias needs its own copy. In `shim` mode a single copy is shared by every alias.
 
 ### 4. Wheel compilation and tagging
 
@@ -179,10 +179,10 @@ This costs one Python interpreter startup per invocation, but a single copy of t
 
 Measured on an Apple Silicon Mac, invoking `rg --version` 60 times and taking the median:
 
-| Launcher              | Time     |
-| --------------------- | -------- |
-| `direct`              | 4.3 ms   |
-| `shim`                | 29.3 ms  |
+| Launcher               | Time    |
+| ---------------------- | ------- |
+| `direct`               | 4.3 ms  |
+| `shim`                 | 29.3 ms |
 | Native (Homebrew `rg`) | 4.3 ms  |
 
 `direct` is exactly as fast as the binary installed by a system package manager, which is the point of the tool. Prefer `shim` only when a package exposes several aliases for one binary and wheel size matters, since `direct` needs a copy per alias.
@@ -238,11 +238,46 @@ wheelbarrow publish WHEELS...
 
 ## Development
 
+### Mutable
+
+The following commands are useful for development. They **will** modify the files in the repository.
+
 ```zsh
-uv sync --dev --frozen
-uv run pytest
-uv run ruff check
-uv run pyrefly
+# Install dependencies
+$ uv sync -U
+
+# Type infer
+$ uv run pyrefly infer
+
+# Format
+$ uv format
+
+# Lint
+$ uv run ruff check --fix [--unsafe-fixes]
+
+# Run tests
+$ uv run pytest -q
+```
+
+### Immutable
+
+The following commands are useful for development. They **will not** modify the files in the repository.
+
+```zsh
+# Install dependencies
+$ uv sync --frozen
+
+# Type check/infer
+$ uv run pyrefly check
+
+# Format
+$ uv format --check
+
+# Lint
+$ uv run ruff check
+
+# Run tests
+$ uv run pytest -q
 ```
 
 ## Licence

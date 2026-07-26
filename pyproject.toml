@@ -8,7 +8,7 @@ name = "wheelbarrow"
 description = "Convert OS binaries into PyPI-installable python wheels"
 readme = "README.md"
 version = "0.1.0"
-requires-python = ">=3.12"
+requires-python = ">=3.14"
 authors = [{ name = "Krish Desai", email = "krish@desai.ml" }]
 keywords = []
 license="MIT OR Apache-2.0"
@@ -49,7 +49,6 @@ cache-keys = [
 ]
 
 [tool.uv.dependency-groups]
-release = { requires-python = ">=3.12" }
 
 
 [tool.uv.build-backend]
@@ -74,7 +73,6 @@ ignore-labels = ["internal", "ci", "testing", "automations"]
 "Other changes" = ["__unknown__"]
 
 [tool.ruff]
-target-version = "py312"
 src = ["src"]
 line-length = 88
 extend-exclude = ["*.ipynb"]
@@ -84,6 +82,25 @@ extend-select = [
     "B",   # flake8-bugbear: likely bugs / footguns
     "I",   # isort-style import checks
     "UP",  # pyupgrade: modern Python syntax
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # Pyflakes (catches undefined variables, broken logic, unused imports)
+    "C90", # mccabe: Cyclomatic complexity limits (keeps functions small and readable)
+    "N",   # pep8-naming: Enforces PEP 8 naming conventions (PascalCase classes, snake_case functions)
+    "ASYNC", # flake8-async: Catches bad async programming practices and deadlocks
+    "S",   # flake8-bandit: Security auditing (e.g., hardcoded credentials, unsafe temp files)
+    "A",   # flake8-builtins: Prevents shadowing built-in names (e.g., re-defining `id`, `list`, or `format`)
+    "FA",  # flake8-future-annotations: Enforces modern postponed annotations behavior
+    "PIE", # flake8-pie: Code simplification suggestions
+    "PT",  # flake8-pytest-style: Enforces idiomatic pytest fixture/assertion style
+    "RET", # flake8-return: Simplifies return statements (removes unnecessary else/elif blocks)
+    "SIM", # flake8-simplify: Refactors unnecessarily complex logic into cleaner idiomatic Python
+    "ARG", # flake8-unused-arguments: Flags unused function arguments
+    "PTH", # flake8-use-pathlib: Forces the use of modern `pathlib.Path` over legacy `os.path`
+    "PGH", # pygrep-hooks: Prevents generic blanket `# type: ignore` or `# noqa` directives without specific error codes
+    "RUF", # Ruff-specific rules: Catches edge-cases, invalid regexes, and native Ruff optimization hints
+    "PERF", # Perflint: Highlights performance anti-patterns in loops and data structures
+    "FURB", # refurb: Modernizes older idiom patterns to modern Python standards
 ]
 
 [tool.ruff.format]
