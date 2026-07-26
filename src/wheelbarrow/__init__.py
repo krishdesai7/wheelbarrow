@@ -1,6 +1,3 @@
-from importlib.metadata import PackageNotFoundError, version
+from wheelbarrow._version import __version__
 
-try:
-    __version__: str = version("wheelbarrow")
-except PackageNotFoundError:
-    __version__ = "0.1.0"  # Fallback for uninstalled local dev
+__all__: list[str] = ["__version__"]

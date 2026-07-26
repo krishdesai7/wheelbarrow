@@ -206,7 +206,7 @@ wheelbarrow build BINARY --name NAME --version VERSION
     -a, --alias NAME          console script to expose (repeatable)
     -o, --output DIR          output directory (default: dist)
     -d, --description TEXT
-        --license EXPR
+        --licence EXPR
         --author NAME / --author-email EMAIL
         --homepage URL
         --keyword WORD        repeatable
@@ -234,7 +234,7 @@ wheelbarrow publish WHEELS...
 - One wheel carries one binary for one platform. Tools that need companion files (man pages, completions, shared libraries) are out of scope.
 - Generated projects use the `uv_build` backend, which is pinned to a narrow range (`>=0.11.30,<0.12`). A project kept with `--keep-project` and rebuilt much later may need that pin refreshed.
 - In `direct` mode each alias is a separate copy of the binary in the wheel. Wheelbarrow warns when more than one alias is requested.
-- Check the upstream license before republishing someone else's binary.
+- Check the upstream licence before republishing someone else's binary.
 
 ## Development
 
@@ -271,7 +271,7 @@ $ uv sync --frozen
 $ uv run pyrefly check
 
 # Format
-$ uv format --check
+$ uv format --diff
 
 # Lint
 $ uv run ruff check

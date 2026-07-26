@@ -78,6 +78,8 @@ line-length = 88
 extend-exclude = ["*.ipynb"]
 
 [tool.ruff.lint]
+future-annotations = true
+preview = true
 extend-select = [
     "B",   # flake8-bugbear: likely bugs / footguns
     "I",   # isort-style import checks
@@ -101,7 +103,13 @@ extend-select = [
     "RUF", # Ruff-specific rules: Catches edge-cases, invalid regexes, and native Ruff optimization hints
     "PERF", # Perflint: Highlights performance anti-patterns in loops and data structures
     "FURB", # refurb: Modernizes older idiom patterns to modern Python standards
+    "T20",  # (flake8-print): Disallows print() statements in production code. Useful if you want to force all output through logging or dedicated output pipelines.
+    "LOG",  # (flake8-logging): Flags logging anti-patterns (such as string formatting inside logger calls instead of passing lazy arguments).
+    "TCH",  # (flake8-type-checking): Automatically moves type-only imports behind if TYPE_CHECKING: blocks to reduce runtime import overhead.
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**.py" = ["assert"]
 
 [tool.ruff.format]
 quote-style = "double"

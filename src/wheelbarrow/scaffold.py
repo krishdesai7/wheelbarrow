@@ -46,6 +46,7 @@ from .templates import (
     MAIN,
     PYPROJECT,
     README,
+    Template,
     toml_array,
     toml_str,
 )
@@ -78,7 +79,7 @@ class PackageSpec:
     launcher: Launcher = Launcher.DIRECT
     description: str = ""
     requires_python: str = ">=3.8"
-    license: str | None = None
+    licence: str | None = None
     authors: list[tuple[str, str]] = field(default_factory=list)
     keywords: list[str] = field(default_factory=list)
     classifiers: list[str] = field(default_factory=list)
@@ -109,7 +110,7 @@ def make_spec(
     launcher: Launcher = Launcher.DIRECT,
     description: str = "",
     requires_python: str = ">=3.8",
-    license: str | None = None,
+    licence: str | None = None,
     author: str | None = None,
     author_email: str | None = None,
     keywords: list[str] | None = None,
@@ -146,7 +147,7 @@ def make_spec(
         launcher=launcher,
         description=description,
         requires_python=requires_python,
-        license=license,
+        licence=licence,
         authors=authors,
         keywords=keywords or [],
         urls=urls,
@@ -249,8 +250,8 @@ def stage_binary(source: Path, destination: Path) -> Path:
 
 def render_pyproject(spec: PackageSpec) -> str:
     extra: list[str] = []
-    if spec.license:
-        extra.append(f"license = {toml_str(spec.license)}")
+    if spec.licence:
+        extra.append(f"licence = {toml_str(spec.licence)}")
     if spec.authors:
         entries: list[str] = []
         for name, email in spec.authors:
@@ -274,16 +275,18 @@ def render_pyproject(spec: PackageSpec) -> str:
             f"{toml_str(alias)} = {toml_str(spec.module + '.__main__:main')}"
             for alias in spec.aliases
         )
-        scripts_table = f"\n[project.scripts]\n{rows}\n"
+        scripts_table: str = f"\n[project.scripts]\n{rows}\n"
 
     urls_table = ""
     if spec.urls:
-        rows = "\n".join(f"{toml_str(k)} = {toml_str(v)}" for k, v in spec.urls.items())
-        urls_table = f"\n[project.urls]\n{rows}\n"
+        rows: str = "\n".join(
+            f"{toml_str(k)} = {toml_str(v)}" for k, v in spec.urls.items()
+        )
+        urls_table: str = f"\n[project.urls]\n{rows}\n"
 
     data_table = ""
     if spec.launcher is Launcher.DIRECT:
-        data_table = DATA_TABLE.substitute(scripts_dir=SCRIPTS_DIR)
+        data_table: str = DATA_TABLE.substitute(scripts_dir=SCRIPTS_DIR)
 
     return PYPROJECT.substitute(
         name=toml_str(spec.dist_name),
@@ -299,8 +302,8 @@ def render_pyproject(spec: PackageSpec) -> str:
 
 
 def render_init(spec: PackageSpec) -> str:
-    template = INIT_SHIM if spec.launcher is Launcher.SHIM else INIT_DIRECT
-    imports = (
+    template: Template = INIT_SHIM if spec.launcher is Launcher.SHIM else INIT_DIRECT
+    imports: str = (
         "from pathlib import Path\n"
         if spec.launcher is Launcher.SHIM
         else "import sysconfig\nfrom pathlib import Path\n"

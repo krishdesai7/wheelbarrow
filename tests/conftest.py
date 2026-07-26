@@ -6,13 +6,15 @@ fixtures in the repository.
 """
 
 import struct
-from collections.abc import Callable
-from pathlib import Path
-from typing import Final, Literal
+from typing import TYPE_CHECKING, Final, Literal
 
 import pytest
 
 from wheelbarrow.wheelfix import Mode
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from pathlib import Path
 
 GLIBC_INTERP: Final[bytes] = b"/lib64/ld-linux-x86-64.so.2\x00"
 MUSL_INTERP: Final[bytes] = b"/lib/ld-musl-x86_64.so.1\x00"

@@ -6,10 +6,12 @@ combination is what lets a single wheel serve every CPython on a given OS and
 architecture.
 """
 
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from .errors import InspectionError
-from .probe import BinaryInfo
+
+if TYPE_CHECKING:
+    from .probe import BinaryInfo
 
 #: Oldest glibc we claim compatibility with, per architecture. 2.17 is the
 #: manylinux2014 baseline and covers essentially every live distro; the newer

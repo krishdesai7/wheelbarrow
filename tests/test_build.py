@@ -12,7 +12,7 @@ import stat
 import subprocess
 import sys
 import zipfile
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -28,6 +28,9 @@ from wheelbarrow.tags import platform_tag
 from wheelbarrow.wheelfix import retag_wheel
 
 from .conftest import make_elf, make_pe
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def build(binary: Path, out: Path, *, keep_project: Path | None = None, **overrides):

@@ -1,8 +1,8 @@
 """Input inspection: Determine which platform a binary was built for.
 
 Wheels that embed a native executable must carry a platform tag. If they do not,
-package managers cannot determine if a given wheel can be installed on the current machine.
-Rather than assuming that the binary matches the machine running Wheelbarrow,
+package managers cannot determine if a given wheel can be installed on the current
+machine. Rather than assuming that the binary matches the machine running Wheelbarrow,
 this module reads its headers directly. This enables cross-building.
 
 Only the header prefix of each format is parsed. This is enough to recover the CPU
@@ -206,7 +206,7 @@ def _elf_libc(path: Path, head: bytes, ei_class: int, endian: str) -> str:
                     fh.read(p_filesz).rstrip(b"\x00").decode("utf-8", "replace")
                 )
                 return "musl" if "musl" in interp else "glibc"
-    except (OSError, struct.error):
+    except OSError, struct.error:
         return "glibc"  # be conservative: assume the stricter requirement
     return "static"
 
@@ -321,7 +321,7 @@ def _slice_min_version(
         bits, endian = MACHO_MAGICS[magic_be]
         (ncmds,) = struct.unpack_from(f"{endian}I", sub, 0x10)
         return _macho_min_version(sub, endian, ncmds, 0x20 if bits == b"\x40" else 0x1C)
-    except (OSError, struct.error):
+    except OSError, struct.error:
         return None
 
 

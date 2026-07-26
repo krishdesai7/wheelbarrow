@@ -113,7 +113,7 @@ def build_project(tmp_path, binary, **overrides):
     root.mkdir(exist_ok=True)
     s = spec(
         description='A tool with "quotes" and \\ backslashes',
-        license="MIT",
+        licence="MIT",
         author="Krish Desai",
         author_email="krish@example.com",
         homepage="https://example.com",

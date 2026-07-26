@@ -1,6 +1,6 @@
 """Tests for platform tag derivation."""
 
-from __future__ import annotations
+from pathlib import Path
 
 import pytest
 
@@ -10,12 +10,12 @@ from wheelbarrow.tags import full_tag, platform_tag
 
 
 def linux(arch: str, libc: str = "glibc") -> BinaryInfo:
-    return BinaryInfo(path=None, format="elf", os="linux", arch=arch, libc=libc)  # type: ignore[arg-type]
+    return BinaryInfo(path=Path(), format="elf", os="linux", arch=arch, libc=libc)
 
 
 def macos(arch: str, minos=None, slices=()) -> BinaryInfo:
     return BinaryInfo(
-        path=None,  # type: ignore[arg-type]
+        path=Path(),
         format="macho",
         os="macos",
         arch=arch,
@@ -25,7 +25,7 @@ def macos(arch: str, minos=None, slices=()) -> BinaryInfo:
 
 
 def windows(arch: str) -> BinaryInfo:
-    return BinaryInfo(path=None, format="pe", os="windows", arch=arch)  # type: ignore[arg-type]
+    return BinaryInfo(path=Path(), format="pe", os="windows", arch=arch)
 
 
 class TestLinux:

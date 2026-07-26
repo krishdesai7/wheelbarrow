@@ -119,8 +119,8 @@ def build_command(
     description: Annotated[
         str, typer.Option("--description", "-d", help="One-line package summary.")
     ] = "",
-    license_: Annotated[
-        str | None, typer.Option("--license", help="License expression, e.g. `MIT`.")
+    licence_: Annotated[
+        str | None, typer.Option("--licence", help="License expression, e.g. `MIT`.")
     ] = None,
     author: Annotated[str | None, typer.Option("--author", help="Author name.")] = None,
     author_email: Annotated[
@@ -208,7 +208,7 @@ def build_command(
             launcher=launcher,
             description=description,
             requires_python=requires_python,
-            license=license_,
+            licence=licence_,
             author=author,
             author_email=author_email,
             keywords=list(keyword) if keyword else None,
@@ -259,11 +259,11 @@ def build_command(
         console.print(f"[dim]  project  [/] {result.project_dir}")
 
 
-def _human_size(size: int) -> str:
+def _human_size(size: float) -> str:
     for unit in ("B", "KiB", "MiB"):
         if size < 1024 or unit == "MiB":
             return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
-        size /= 1024  # type: ignore[assignment]
+        size /= 1024
     return f"{size} B"  # pragma: no cover - loop always returns
 
 

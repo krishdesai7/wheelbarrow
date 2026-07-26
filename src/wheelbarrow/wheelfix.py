@@ -173,8 +173,7 @@ def _rewrite_wheel_metadata(data: bytes, tag: str) -> bytes:
     # Keep the trailing blank line convention of message-style metadata.
     while kept and not kept[-1].strip():
         kept.pop()
-    kept.append("Root-Is-Purelib: false")
-    kept.append(f"Tag: {tag}")
+    kept.extend(("Root-Is-Purelib: false", f"Tag: {tag}"))
     return ("\n".join(kept) + "\n").encode("utf-8")
 
 
@@ -187,7 +186,7 @@ def _rewrite_wheel_json(data: bytes, tag: str) -> bytes:
     """
     try:
         payload = json.loads(data.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except UnicodeDecodeError, json.JSONDecodeError:
         # Not something we understand; leave it exactly as the backend wrote it.
         return data
     if not isinstance(payload, dict):
