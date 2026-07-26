@@ -267,7 +267,7 @@ Running a command with no arguments at all prints its help, so `wheelbarrow buil
 
 ### Mutable
 
-The following commands are useful for development. They **will** modify the files in the repository.
+The following commands are useful for development. They **will** modify the files in the repository. Can be run collectively with `uv run just m[utable]`.
 
 ```zsh
 # Install dependencies
@@ -288,7 +288,7 @@ $ uv run pytest -q
 
 ### Immutable
 
-The following commands are useful for development. They **will not** modify the files in the repository.
+The following commands are useful for development. They **will not** modify the files in the repository. Can be run collectively with `uv run just i[mmutable]`.
 
 ```zsh
 # Install dependencies
