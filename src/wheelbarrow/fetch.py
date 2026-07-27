@@ -34,13 +34,15 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
-from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from . import __version__
 from .errors import FetchError
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
 
 API_ROOT: Final[str] = "https://api.github.com"
 
@@ -321,7 +323,7 @@ def _request(url: str, *, token: str | None, accept: str) -> urllib.request.Requ
     }
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    return urllib.request.Request(url, headers=headers)  # noqa: S310
+    return urllib.request.Request(url, headers=headers)  # ruff: ignore[suspicious-url-open-usage]
 
 
 def _open(url: str, *, timeout: float, token: str | None, accept: str) -> Any:
@@ -515,33 +517,51 @@ def find_digest(
     if asset.digest:
         return Verification(asset.digest, "the GitHub API")
 
-    fetch: Callable[[Asset], str | None] = read_text or (
+    read: Callable[[Asset], str | None] = read_text or (
         lambda a: _read_asset_text(a, timeout=timeout, token=token)
     )
+    return _sidecar_digest(release, asset, read) or _manifest_digest(
+        release, asset, read
+    )
 
+
+def _sidecar_digest(
+    release: Release, asset: Asset, read: Callable[[Asset], str | None]
+) -> Verification | None:
+    """Look for a `<asset>.sha256`-style file covering this asset alone.
+
+    Only here is a bare digest accepted, because only here does the file's own
+    name say what it covers.
+    """
     for suffix in SIDECAR_SUFFIXES:
         sidecar: Asset | None = release.named(asset.name + suffix)
         if sidecar is None:
             continue
-        text: str | None = fetch(sidecar)
+        text: str | None = read(sidecar)
         if text is None:
             continue
         digest: str | None = parse_checksums(text, want=asset.name, allow_bare=True)
         if digest:
             return Verification(digest, sidecar.name)
+    return None
 
+
+def _manifest_digest(
+    release: Release, asset: Asset, read: Callable[[Asset], str | None]
+) -> Verification | None:
+    """Fall back to a whole-release checksum file listing many assets."""
     for candidate in release.assets:
-        if candidate.name == asset.name or not is_checksum_asset(candidate.name):
+        # A name starting with the asset's own is a sidecar, already tried.
+        if not is_checksum_asset(candidate.name) or candidate.name.startswith(
+            asset.name
+        ):
             continue
-        if candidate.name.startswith(asset.name):
-            continue  # already tried above as a sidecar
-        text = fetch(candidate)
+        text: str | None = read(candidate)
         if text is None:
             continue
-        digest = parse_checksums(text, want=asset.name)
+        digest: str | None = parse_checksums(text, want=asset.name)
         if digest:
             return Verification(digest, candidate.name)
-
     return None
 
 

@@ -17,7 +17,6 @@ from rich.table import Table
 from . import __version__, fetch, pypi
 from .builder import BuildResult, build_package
 from .errors import WheelbarrowError
-from .fetch import Asset, FetchedAsset, Release, Verification
 from .probe import BinaryInfo, inspect_binary
 from .publish import PublishPlan, plan_publish, resolve_token, run_publish
 from .pypi import NameStatus
@@ -93,9 +92,7 @@ def fetch_command(
             help="Release URL, or `owner/repo` for the latest release.",
         ),
     ],
-    dest: Annotated[Path, typer.Argument(help="Directory to download into.")] = Path(
-        "."
-    ),
+    dest: Annotated[Path, typer.Argument(help="Directory to download into.")] = Path(),
     tag: Annotated[
         str | None,
         typer.Option("--tag", "-t", help="Release tag, if **SOURCE** has none."),
@@ -142,11 +139,11 @@ def fetch_command(
 
     Example:
 
-        wheelbarrow fetch https://github.com/starship/starship/releases/tag/v1.26.0 ~/starship -p '*-unknown-linux-musl.tar.gz'
+        wheelbarrow fetch starship/starship ~/starship -t v1.26.0 -p '*-musl.tar.gz'
     """
     try:
-        release: Release = _resolve_release(source, tag, timeout=timeout)
-        chosen: list[Asset] = fetch.select_assets(release, list(pattern or ()))
+        release: fetch.Release = _resolve_release(source, tag, timeout=timeout)
+        chosen: list[fetch.Asset] = fetch.select_assets(release, list(pattern or ()))
     except WheelbarrowError as exc:
         raise _fail(str(exc)) from exc
 
@@ -160,7 +157,7 @@ def fetch_command(
         return
 
     try:
-        results: list[FetchedAsset] = _run_fetch(
+        results: list[fetch.FetchedAsset] = _run_fetch(
             release,
             chosen,
             dest,
@@ -174,7 +171,7 @@ def fetch_command(
     _report_fetched(results, dest)
 
 
-def _resolve_release(source: str, tag: str | None, *, timeout: float) -> Release:
+def _resolve_release(source: str, tag: str | None, *, timeout: float) -> fetch.Release:
     """Look up the release named by `source`, reconciling it with `--tag`."""
     owner: str
     repo: str
@@ -192,7 +189,7 @@ def _resolve_release(source: str, tag: str | None, *, timeout: float) -> Release
     )
 
 
-def _print_assets(release: Release, chosen: list[Asset]) -> None:
+def _print_assets(release: fetch.Release, chosen: list[fetch.Asset]) -> None:
     """List the release's assets, marking which ones would be downloaded."""
     selected: set[str] = {a.name for a in chosen}
     table = Table(box=None, pad_edge=False)
@@ -220,14 +217,14 @@ def _print_assets(release: Release, chosen: list[Asset]) -> None:
 
 
 def _run_fetch(
-    release: Release,
-    chosen: list[Asset],
+    release: fetch.Release,
+    chosen: list[fetch.Asset],
     dest: Path,
     *,
     extract_archives: bool,
     allow_unverified: bool,
     timeout: float,
-) -> list[FetchedAsset]:
+) -> list[fetch.FetchedAsset]:
     """Download `chosen` behind a progress bar spanning the whole set."""
     with Progress(
         SpinnerColumn(),
@@ -239,7 +236,9 @@ def _run_fetch(
     ) as progress:
         task = progress.add_task("", total=sum(a.size for a in chosen) or None)
 
-        def started(asset: Asset, _verification: Verification | None) -> None:
+        def started(
+            asset: fetch.Asset, _verification: fetch.Verification | None
+        ) -> None:
             progress.update(task, description=asset.name)
 
         return fetch.fetch_assets(
@@ -255,7 +254,7 @@ def _run_fetch(
         )
 
 
-def _report_fetched(results: list[FetchedAsset], dest: Path) -> None:
+def _report_fetched(results: list[fetch.FetchedAsset], dest: Path) -> None:
     """Summarise what landed on disk, and point at what `build` can consume."""
     for result in results:
         source: str = (
