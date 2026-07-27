@@ -1,7 +1,5 @@
 """End-to-end build tests, including cross-platform packaging."""
 
-from __future__ import annotations
-
 import base64
 import csv
 import hashlib
@@ -29,10 +27,15 @@ from wheelbarrow.scaffold import (
 from wheelbarrow.tags import platform_tag
 from wheelbarrow.wheelfix import retag_wheel
 
-from .conftest import make_elf, make_pe
+from .conftest import MUSL_INTERP, make_elf, make_pe
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
+    from subprocess import CompletedProcess
+    from typing import Any
+
+    from wheelbarrow.wheelfix import RetagResult
 
 
 def build(
@@ -63,7 +66,7 @@ def entry_mode(info: zipfile.ZipInfo) -> int:
 def _readme_of(wheel: Path) -> str:
     """The wheel's long description, which is what PyPI renders as the page."""
     with zipfile.ZipFile(wheel) as zf:
-        name = next(n for n in zf.namelist() if n.endswith(".dist-info/METADATA"))
+        name: str = next(n for n in zf.namelist() if n.endswith(".dist-info/METADATA"))
         return zf.read(name).decode()
 
 
@@ -78,8 +81,6 @@ class TestCrossPlatformBuild:
         assert result.wheel.name == "demo_bin-1.2.3-py3-none-manylinux_2_17_x86_64.whl"
 
     def test_aarch64_musl_binary(self, write_binary, tmp_path) -> None:
-        from .conftest import MUSL_INTERP
-
         binary = write_binary("tool", make_elf(0xB7, interp=MUSL_INTERP))
         result: BuildResult = build(binary, tmp_path / "dist")
         assert result.tag == "py3-none-musllinux_1_2_aarch64"
@@ -96,8 +97,13 @@ class TestCrossPlatformBuild:
 
 class TestWheelContents:
     @pytest.fixture(params=[Launcher.DIRECT, Launcher.SHIM])
-    def built(self, request, write_binary, tmp_path) -> BuildResult:
-        binary = write_binary("tool", make_elf(0x3E))
+    def built(
+        self,
+        request: pytest.FixtureRequest,
+        write_binary: Callable[[str, bytes], Path],
+        tmp_path: Path,
+    ) -> BuildResult:
+        binary: Path = write_binary("tool", make_elf(0x3E))
         return build(
             binary,
             tmp_path / "dist",
@@ -106,28 +112,28 @@ class TestWheelContents:
         )
 
     @pytest.fixture
-    def wheel(self, built):
+    def wheel(self, built: BuildResult) -> Path:
         return built.wheel
 
-    def test_binary_is_stored_executable(self, built) -> None:
-        expected = archive_executables(built.spec)
+    def test_binary_is_stored_executable(self, built: BuildResult) -> None:
+        expected: set[str] = archive_executables(built.spec)
         with zipfile.ZipFile(built.wheel) as zf:
-            names = set(zf.namelist())
+            names: set[str] = set(zf.namelist())
             assert expected <= names, f"missing {expected - names}"
             for path in expected:
                 assert entry_mode(zf.getinfo(path)) == 0o755, path
 
-    def test_other_files_are_not_executable(self, built) -> None:
-        executables = archive_executables(built.spec)
+    def test_other_files_are_not_executable(self, built: BuildResult) -> None:
+        executables: set[str] = archive_executables(built.spec)
         with zipfile.ZipFile(built.wheel) as zf:
             for item in zf.infolist():
                 if item.is_dir() or item.filename in executables:
                     continue
                 assert entry_mode(item) == 0o644, item.filename
 
-    def test_wheel_metadata_declares_the_tag(self, wheel) -> None:
+    def test_wheel_metadata_declares_the_tag(self, wheel: Path) -> None:
         with zipfile.ZipFile(wheel) as zf:
-            text = zf.read("demo_bin-1.2.3.dist-info/WHEEL").decode()
+            text: str = zf.read("demo_bin-1.2.3.dist-info/WHEEL").decode()
         assert "Tag: py3-none-manylinux_2_17_x86_64" in text
         # Platform-specific content belongs in platlib, not purelib.
         assert "Root-Is-Purelib: false" in text
@@ -136,22 +142,24 @@ class TestWheelContents:
     def test_record_is_complete_and_correct(self, wheel) -> None:
         with zipfile.ZipFile(wheel) as zf:
             record_name = "demo_bin-1.2.3.dist-info/RECORD"
-            rows = list(csv.reader(io.StringIO(zf.read(record_name).decode())))
-            listed = set()
+            rows: list[list[str]] = list(
+                csv.reader(io.StringIO(zf.read(record_name).decode()))
+            )
+            listed: set[str] = set()
 
             for path, digest, size in rows:
                 listed.add(path)
                 if path == record_name:
                     assert (digest, size) == ("", "")
                     continue
-                data = zf.read(path)
-                expected = base64.urlsafe_b64encode(
+                data: bytes = zf.read(path)
+                expected: bytes = base64.urlsafe_b64encode(
                     hashlib.sha256(data).digest()
                 ).rstrip(b"=")
                 assert digest == f"sha256={expected.decode()}"
                 assert int(size) == len(data)
 
-            archived = {i.filename for i in zf.infolist() if not i.is_dir()}
+            archived: set[str] = {i.filename for i in zf.infolist() if not i.is_dir()}
             assert archived == listed
 
     def test_binary_is_not_stored_twice(self, built) -> None:
@@ -161,19 +169,19 @@ class TestWheelContents:
         alias on purpose, so the question is whether those bytes appear anywhere
         they were not asked for.
         """
-        expected = archive_executables(built.spec)
+        expected: set[str] = archive_executables(built.spec)
         with zipfile.ZipFile(built.wheel) as zf:
-            wanted = hashlib.sha256(zf.read(next(iter(expected)))).hexdigest()
-            digests = [
+            wanted: str = hashlib.sha256(zf.read(next(iter(expected)))).hexdigest()
+            digests: list[str] = [
                 hashlib.sha256(zf.read(item.filename)).hexdigest()
                 for item in zf.infolist()
                 if not item.is_dir()
             ]
         assert digests.count(wanted) == len(expected)
 
-    def test_no_stray_record_entry_from_the_backend(self, wheel) -> None:
+    def test_no_stray_record_entry_from_the_backend(self, wheel: Path) -> None:
         with zipfile.ZipFile(wheel) as zf:
-            names = zf.namelist()
+            names: list[str] = zf.namelist()
         assert names.count("demo_bin-1.2.3.dist-info/RECORD") == 1
 
 
@@ -181,24 +189,26 @@ class TestScriptBuild:
     """Not every tool is machine code; a `#!` script packages the same way."""
 
     @pytest.fixture(params=[Launcher.DIRECT, Launcher.SHIM])
-    def built(self, request, shell_script, tmp_path) -> BuildResult:
+    def built(
+        self, request: pytest.FixtureRequest, shell_script: Path, tmp_path: Path
+    ) -> BuildResult:
         return build(shell_script, tmp_path / "dist", launcher=request.param)
 
-    def test_the_wheel_is_pure_python_tagged(self, built) -> None:
+    def test_the_wheel_is_pure_python_tagged(self, built: BuildResult) -> None:
         """Nothing in a script constrains where it can be installed."""
         assert built.tag == "py3-none-any"
         assert built.wheel.name == "demo_bin-1.2.3-py3-none-any.whl"
 
-    def test_purelib_is_declared(self, built) -> None:
+    def test_purelib_is_declared(self, built: BuildResult) -> None:
         """The counterpart of the `any` tag: no platform-specific content."""
         with zipfile.ZipFile(built.wheel) as zf:
-            text = zf.read("demo_bin-1.2.3.dist-info/WHEEL").decode()
+            text: str = zf.read("demo_bin-1.2.3.dist-info/WHEEL").decode()
         assert "Tag: py3-none-any" in text
         assert "Root-Is-Purelib: true" in text
 
-    def test_the_script_is_stored_executable(self, built) -> None:
+    def test_the_script_is_stored_executable(self, built: BuildResult) -> None:
         """A script that is not executable is not a command."""
-        expected = archive_executables(built.spec)
+        expected: set[str] = archive_executables(built.spec)
         with zipfile.ZipFile(built.wheel) as zf:
             assert expected <= set(zf.namelist())
             for path in expected:
@@ -224,35 +234,35 @@ class TestLauncherLayouts:
         return write_binary("tool", make_elf(0x3E))
 
     def test_direct_puts_the_binary_in_data_scripts(self, elf, tmp_path) -> None:
-        result = build(elf, tmp_path / "dist", aliases=["tool"])
+        result: BuildResult = build(elf, tmp_path / "dist", aliases=["tool"])
         with zipfile.ZipFile(result.wheel) as zf:
-            names = zf.namelist()
+            names: list[str] = zf.namelist()
         assert "demo_bin-1.2.3.data/scripts/tool" in names
         assert "demo_bin/bin/tool" not in names
         # A console script of the same name would clobber the binary.
         assert "demo_bin-1.2.3.dist-info/entry_points.txt" not in names
 
     def test_direct_names_the_script_after_the_alias(self, elf, tmp_path) -> None:
-        result = build(elf, tmp_path / "dist", aliases=["renamed"])
+        result: BuildResult = build(elf, tmp_path / "dist", aliases=["renamed"])
         with zipfile.ZipFile(result.wheel) as zf:
             assert "demo_bin-1.2.3.data/scripts/renamed" in zf.namelist()
 
     def test_shim_keeps_the_binary_in_the_package(self, elf, tmp_path) -> None:
-        result = build(elf, tmp_path / "dist", launcher=Launcher.SHIM)
+        result: BuildResult = build(elf, tmp_path / "dist", launcher=Launcher.SHIM)
         with zipfile.ZipFile(result.wheel) as zf:
-            names = zf.namelist()
-            text = zf.read("demo_bin-1.2.3.dist-info/entry_points.txt").decode()
+            names: list[str] = zf.namelist()
+            text: str = zf.read("demo_bin-1.2.3.dist-info/entry_points.txt").decode()
         assert "demo_bin/bin/tool" in names
         assert not any(".data/scripts" in n for n in names)
         assert "tool = demo_bin.__main__:main" in text
 
     def test_shim_shares_one_copy_across_aliases(self, elf, tmp_path) -> None:
-        result = build(
+        result: BuildResult = build(
             elf, tmp_path / "dist", aliases=["tool", "demo"], launcher=Launcher.SHIM
         )
         with zipfile.ZipFile(result.wheel) as zf:
-            text = zf.read("demo_bin-1.2.3.dist-info/entry_points.txt").decode()
-            binaries = [
+            text: str = zf.read("demo_bin-1.2.3.dist-info/entry_points.txt").decode()
+            binaries: list[str] = [
                 i.filename
                 for i in zf.infolist()
                 if not i.is_dir() and i.filename.startswith("demo_bin/bin/")
@@ -274,15 +284,19 @@ class TestWheelJsonRewrite:
         ],
     )
     def test_wheel_json_is_kept_in_step(
-        self, write_binary, tmp_path, tag, pure
+        self,
+        write_binary: Callable[[str, bytes], Path],
+        tmp_path: Path,
+        tag: str,
+        pure: bool,
     ) -> None:
-        binary = write_binary("tool", make_elf(0x3E))
-        result = build(binary, tmp_path / "dist")
+        binary: Path = write_binary("tool", make_elf(0x3E))
+        result: BuildResult = build(binary, tmp_path / "dist")
 
         # Inject a WHEEL.json as `uv build` would, then retag again.
-        staged = tmp_path / "staged"
+        staged: Path = tmp_path / "staged"
         staged.mkdir()
-        source = staged / "demo_bin-1.2.3-py3-none-any.whl"
+        source: Path = staged / "demo_bin-1.2.3-py3-none-any.whl"
         with zipfile.ZipFile(result.wheel) as src, zipfile.ZipFile(source, "w") as dst:
             for item in src.infolist():
                 if item.is_dir():
@@ -301,12 +315,12 @@ class TestWheelJsonRewrite:
                 ),
             )
 
-        retagged = retag_wheel(source, tag=tag, executable_paths=set())
+        retagged: RetagResult = retag_wheel(source, tag=tag, executable_paths=set())
         with zipfile.ZipFile(retagged.path) as zf:
-            payload = json.loads(
+            payload: dict[str, Any] = json.loads(
                 zf.read("demo_bin-1.2.3.dist-info/WHEEL.json").decode()
             )
-            meta = zf.read("demo_bin-1.2.3.dist-info/WHEEL").decode()
+            meta: str = zf.read("demo_bin-1.2.3.dist-info/WHEEL").decode()
         assert payload["tags"] == [tag]
         assert payload["root-is-purelib"] is pure
         assert payload["unknown-key"] == "preserved"
@@ -318,22 +332,24 @@ class TestOutputCollisions:
     """Two inputs can resolve to one tag; the second must not win silently."""
 
     def test_a_differing_wheel_of_the_same_name_is_refused(
-        self, write_binary, tmp_path
+        self, write_binary: Callable[[str, bytes], Path], tmp_path: Path
     ) -> None:
         """A glibc build and a static build both answer to manylinux."""
-        dist = tmp_path / "dist"
+        dist: Path = tmp_path / "dist"
         build(write_binary("a/tool", make_elf(0x3E)), dist, platform_tag="linux_x86_64")
-        second = write_binary("b/tool", make_elf(0x3E) + b"different")
+        second: Path = write_binary("b/tool", make_elf(0x3E) + b"different")
 
         with pytest.raises(BuildError, match="already exists"):
             build(second, dist, platform_tag="linux_x86_64")
 
-    def test_the_first_wheel_is_left_intact(self, write_binary, tmp_path) -> None:
-        dist = tmp_path / "dist"
-        first = build(
+    def test_the_first_wheel_is_left_intact(
+        self, write_binary: Callable[[str, bytes], Path], tmp_path: Path
+    ) -> None:
+        dist: Path = tmp_path / "dist"
+        first: BuildResult = build(
             write_binary("a/tool", make_elf(0x3E)), dist, platform_tag="linux_x86_64"
         )
-        original = first.wheel.read_bytes()
+        original: bytes = first.wheel.read_bytes()
 
         with pytest.raises(BuildError):
             build(
@@ -344,18 +360,20 @@ class TestOutputCollisions:
         assert first.wheel.read_bytes() == original
 
     def test_an_identical_rebuild_is_not_a_collision(
-        self, write_binary, tmp_path
+        self, write_binary: Callable[[str, bytes], Path], tmp_path: Path
     ) -> None:
         """Builds are reproducible, so the same input twice is a no-op."""
-        binary = write_binary("tool", make_elf(0x3E))
-        dist = tmp_path / "dist"
-        first = build(binary, dist).wheel.read_bytes()
+        binary: Path = write_binary("tool", make_elf(0x3E))
+        dist: Path = tmp_path / "dist"
+        first: bytes = build(binary, dist).wheel.read_bytes()
         assert build(binary, dist).wheel.read_bytes() == first
 
-    def test_overwrite_allows_it(self, write_binary, tmp_path) -> None:
-        dist = tmp_path / "dist"
+    def test_overwrite_allows_it(
+        self, write_binary: Callable[[str, bytes], Path], tmp_path: Path
+    ) -> None:
+        dist: Path = tmp_path / "dist"
         build(write_binary("a/tool", make_elf(0x3E)), dist, platform_tag="linux_x86_64")
-        result = build(
+        result: BuildResult = build(
             write_binary("b/tool", make_elf(0x3E) + b"different"),
             dist,
             platform_tag="linux_x86_64",
@@ -364,10 +382,10 @@ class TestOutputCollisions:
         assert result.wheel.is_file()
 
     def test_no_intermediate_wheel_is_left_in_the_output(
-        self, write_binary, tmp_path
+        self, write_binary: Callable[[str, bytes], Path], tmp_path: Path
     ) -> None:
         """The backend's untagged `py3-none-any` must never reach `dist/`."""
-        dist = tmp_path / "dist"
+        dist: Path = tmp_path / "dist"
         build(write_binary("tool", make_elf(0x3E)), dist)
         assert [p.name for p in dist.iterdir()] == [
             "demo_bin-1.2.3-py3-none-manylinux_2_17_x86_64.whl"
@@ -378,25 +396,31 @@ class TestCompressedTagSets:
     """A static binary claims both libc families, in one wheel."""
 
     @pytest.fixture
-    def built(self, write_binary, tmp_path) -> BuildResult:
+    def built(
+        self, write_binary: Callable[[str, bytes], Path], tmp_path: Path
+    ) -> BuildResult:
         # No PT_INTERP: statically linked, so it satisfies glibc and musl both.
         return build(write_binary("tool", make_elf(0x3E, interp=None)), tmp_path / "d")
 
-    def test_the_file_name_carries_the_compressed_set(self, built) -> None:
+    def test_the_file_name_carries_the_compressed_set(self, built: BuildResult) -> None:
         assert built.wheel.name == (
             "demo_bin-1.2.3-py3-none-manylinux_2_17_x86_64.musllinux_1_2_x86_64.whl"
         )
 
-    def test_wheel_metadata_expands_it_to_one_tag_per_line(self, built) -> None:
+    def test_wheel_metadata_expands_it_to_one_tag_per_line(
+        self, built: BuildResult
+    ) -> None:
         """PEP 427 takes the expanded form here, unlike the file name."""
         with zipfile.ZipFile(built.wheel) as zf:
-            text = zf.read("demo_bin-1.2.3.dist-info/WHEEL").decode()
+            text: str = zf.read("demo_bin-1.2.3.dist-info/WHEEL").decode()
         assert "Tag: py3-none-manylinux_2_17_x86_64" in text
         assert "Tag: py3-none-musllinux_1_2_x86_64" in text
         assert text.count("Tag:") == 2
         assert "Root-Is-Purelib: false" in text
 
-    def test_the_wheel_is_still_installable_and_correct(self, built) -> None:
+    def test_the_wheel_is_still_installable_and_correct(
+        self, built: BuildResult
+    ) -> None:
         with zipfile.ZipFile(built.wheel) as zf:
             assert zf.testzip() is None
             assert archive_executables(built.spec) <= set(zf.namelist())
@@ -423,18 +447,20 @@ class TestBatchBuilds:
         ]
 
     def test_one_wheel_per_binary(self, two_platforms, tmp_path) -> None:
-        results = build_packages(two_platforms, tmp_path / "dist")
+        results: list[BuildResult] = build_packages(two_platforms, tmp_path / "dist")
         assert len(results) == 2
         assert len(list((tmp_path / "dist").glob("*.whl"))) == 2
 
     def test_they_differ_only_in_platform_tag(self, two_platforms, tmp_path) -> None:
-        results = build_packages(two_platforms, tmp_path / "dist")
-        tags = {r.tag for r in results}
+        results: list[BuildResult] = build_packages(two_platforms, tmp_path / "dist")
+        tags: set[str] = {r.tag for r in results}
         assert len(tags) == 2
         assert {r.spec.dist_name for r in results} == {"demo-bin"}
         assert {r.spec.version for r in results} == {"1.2.3"}
 
-    def test_each_result_is_reported_as_it_lands(self, two_platforms, tmp_path) -> None:
+    def test_each_result_is_reported_as_it_lands(
+        self, two_platforms: list[tuple[Path, PackageSpec]], tmp_path: Path
+    ) -> None:
         """A long batch must not be silent while it works."""
         seen: list[str] = []
         build_packages(
@@ -443,49 +469,53 @@ class TestBatchBuilds:
         assert len(seen) == 2
 
     def test_a_batch_wheel_matches_the_same_build_done_alone(
-        self, two_platforms, tmp_path
+        self, two_platforms: list[tuple[Path, PackageSpec]], tmp_path: Path
     ) -> None:
         """Batching must be a loop, not a different code path.
 
         Built from the spec the batch actually used, since that is the one
         thing a batch changes: every wheel's README lists the whole set.
         """
-        batched = build_packages(two_platforms, tmp_path / "batch")
-        binary, _ = two_platforms[0]
-        alone = build_package(binary, batched[0].spec, tmp_path / "alone")
+        batched: list[BuildResult] = build_packages(two_platforms, tmp_path / "batch")
+        binary: Path = two_platforms[0][0]
+        alone: BuildResult = build_package(binary, batched[0].spec, tmp_path / "alone")
         assert alone.wheel.read_bytes() == batched[0].wheel.read_bytes()
 
-    def test_the_callers_specs_are_left_alone(self, two_platforms, tmp_path) -> None:
+    def test_the_callers_specs_are_left_alone(
+        self, two_platforms: list[tuple[Path, PackageSpec]], tmp_path: Path
+    ) -> None:
         """A caller's PackageSpec is theirs; a build must not rewrite it."""
         build_packages(two_platforms, tmp_path / "dist")
         assert all(spec.variants == [] for _, spec in two_platforms)
 
     def test_every_wheel_describes_the_whole_set(self, two_platforms, tmp_path) -> None:
         """PyPI shows one description for the project, whichever wheel it picks."""
-        results = build_packages(two_platforms, tmp_path / "dist")
-        tags = {r.tag.rpartition("-")[2] for r in results}
+        results: list[BuildResult] = build_packages(two_platforms, tmp_path / "dist")
+        tags: set[str] = {r.tag.rpartition("-")[2] for r in results}
         for result in results:
-            readme = _readme_of(result.wheel)
+            readme: str = _readme_of(result.wheel)
             for tag in tags:
                 assert tag in readme, f"{result.tag} omits {tag}"
 
     def test_each_wheels_own_digest_appears_in_all_of_them(
         self, two_platforms, tmp_path
     ) -> None:
-        results = build_packages(two_platforms, tmp_path / "dist")
-        digests = {
+        results: list[BuildResult] = build_packages(two_platforms, tmp_path / "dist")
+        digests: set[str] = {
             hashlib.sha256(binary.read_bytes()).hexdigest()
             for binary, _ in two_platforms
         }
         for result in results:
-            readme = _readme_of(result.wheel)
+            readme: str = _readme_of(result.wheel)
             assert all(digest in readme for digest in digests)
 
     def test_a_lone_build_still_describes_only_itself(
         self, two_platforms, tmp_path
     ) -> None:
         """One wheel is not a set, and its README must not grow a listing."""
-        results = build_packages(two_platforms[:1], tmp_path / "dist")
+        results: list[BuildResult] = build_packages(
+            two_platforms[:1], tmp_path / "dist"
+        )
         assert "These wheels repackage" not in _readme_of(results[0].wheel)
 
     def test_every_wheel_renders_the_identical_block(
@@ -497,18 +527,20 @@ class TestBatchBuilds:
         so a block naming it would differ per wheel and the page would be
         wrong for whoever installed the other one.
         """
-        results = build_packages(two_platforms, tmp_path / "dist")
-        blocks = {_readme_of(r.wheel).partition("## Provenance")[2] for r in results}
+        results: list[BuildResult] = build_packages(two_platforms, tmp_path / "dist")
+        blocks: set[str] = {
+            _readme_of(r.wheel).partition("## Provenance")[2] for r in results
+        }
         assert len(blocks) == 1
 
     def test_kept_projects_do_not_overwrite_each_other(
-        self, two_platforms, tmp_path
+        self, two_platforms: list[tuple[Path, PackageSpec]], tmp_path: Path
     ) -> None:
         """One --keep-project directory, so each build needs its own subtree."""
         build_packages(
             two_platforms, tmp_path / "dist", keep_project=tmp_path / "projects"
         )
-        kept = sorted(p.name for p in (tmp_path / "projects").iterdir())
+        kept: list[str] = sorted(p.name for p in (tmp_path / "projects").iterdir())
         assert len(kept) == 2
         assert all(
             (tmp_path / "projects" / k / "pyproject.toml").is_file() for k in kept
@@ -563,12 +595,12 @@ class TestBatchTagCollisions:
         self, write_binary, tmp_path
     ) -> None:
         """Builds are reproducible, so a duplicate input loses nothing."""
-        data = make_elf(0x3E, interp=None)
-        plans = [
+        data: bytes = make_elf(0x3E, interp=None)
+        plans: list[tuple[Path, PackageSpec]] = [
             self.plan(write_binary("a/tool", data)),
             self.plan(write_binary("b/tool", data)),
         ]
-        results = build_packages(plans, tmp_path / "dist")
+        results: list[BuildResult] = build_packages(plans, tmp_path / "dist")
         assert len(results) == 2
         assert len(list((tmp_path / "dist").glob("*.whl"))) == 1
 
@@ -578,8 +610,8 @@ class TestReproducibility:
         self, write_binary, tmp_path
     ) -> None:
         binary = write_binary("tool", make_elf(0x3E))
-        first = build(binary, tmp_path / "a").wheel.read_bytes()
-        second = build(binary, tmp_path / "b").wheel.read_bytes()
+        first: bytes = build(binary, tmp_path / "a").wheel.read_bytes()
+        second: bytes = build(binary, tmp_path / "b").wheel.read_bytes()
         assert first == second
 
 
@@ -587,7 +619,7 @@ class TestKeepProject:
     def test_generated_project_can_be_kept(self, write_binary, tmp_path) -> None:
         binary = write_binary("tool", make_elf(0x3E))
         kept = tmp_path / "kept"
-        result = build(binary, tmp_path / "dist", keep_project=kept)
+        result: BuildResult = build(binary, tmp_path / "dist", keep_project=kept)
         assert result.project_dir == kept
         assert (kept / "pyproject.toml").is_file()
         assert (kept / "src" / "demo_bin" / "__main__.py").is_file()
@@ -597,11 +629,11 @@ class TestKeepProject:
 
 def install_command(wheel: Path, target: Path) -> list[str] | None:
     """Return an installer invocation, preferring pip and falling back to uv."""
-    probe = subprocess.run(
+    probe: CompletedProcess[bytes] = subprocess.run(
         [sys.executable, "-m", "pip", "--version"], capture_output=True, check=False
     )
     if probe.returncode == 0:
-        base = [sys.executable, "-m", "pip", "install"]
+        base: list[str] = [sys.executable, "-m", "pip", "install"]
     elif (uv := shutil.which("uv")) is not None:
         base = [uv, "pip", "install", "--python", sys.executable]
     else:
@@ -619,23 +651,25 @@ class TestInstalledWheelRuns:
     """
 
     @pytest.fixture(params=[Launcher.DIRECT, Launcher.SHIM])
-    def installed(self, request, tmp_path):
+    def installed(
+        self, request: pytest.FixtureRequest, tmp_path: Path
+    ) -> tuple[Path, Path]:
         """Build, install and return where the executable landed."""
-        binary = tmp_path / "greet"
+        binary: Path = tmp_path / "greet"
         binary.write_text("#!/bin/sh\nprintf 'hello %s\\n' \"$1\"\nexit 7\n")
         binary.chmod(0o755)
 
-        spec = make_spec(
+        spec: PackageSpec = make_spec(
             name="greet-bin",
             version="0.1.0",
             binary_name="greet",
             platform_tag=platform_tag(inspect_binary(binary)),
             launcher=request.param,
         )
-        result = build_package(binary, spec, tmp_path / "dist")
+        result: BuildResult = build_package(binary, spec, tmp_path / "dist")
 
-        target = tmp_path / "site"
-        command = install_command(result.wheel, target)
+        target: Path = tmp_path / "site"
+        command: list[str] | None = install_command(result.wheel, target)
         if command is None:
             pytest.skip("neither pip nor uv is available to install the wheel")
         subprocess.run(command, check=True, capture_output=True)  # ruff: ignore[subprocess-without-shell-equals-true]
@@ -643,7 +677,7 @@ class TestInstalledWheelRuns:
         # Direct-mode wheels put the binary in `.data/scripts`, which installers
         # unpack into a `bin/` beside the packages under `--target`.
         if request.param is Launcher.DIRECT:
-            executable = target / "bin" / "greet"
+            executable: Path = target / "bin" / "greet"
         else:
             executable = target / "greet_bin" / "bin" / "greet"
         return target, executable
@@ -657,7 +691,7 @@ class TestInstalledWheelRuns:
 
     def test_running_it_directly_works(self, installed) -> None:
         _, executable = installed
-        completed = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]
+        completed: CompletedProcess[str] = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]
             [str(executable), "world"], capture_output=True, text=True, check=False
         )
         assert completed.stdout.strip() == "hello world"
@@ -665,7 +699,7 @@ class TestInstalledWheelRuns:
 
     def test_python_dash_m_works(self, installed) -> None:
         target, _ = installed
-        completed = subprocess.run(
+        completed: CompletedProcess[str] = subprocess.run(
             [sys.executable, "-m", "greet_bin", "world"],
             cwd=target,
             capture_output=True,
@@ -679,7 +713,7 @@ class TestInstalledWheelRuns:
 
     def test_binary_path_resolves_to_the_installed_file(self, installed) -> None:
         target, executable = installed
-        completed = subprocess.run(
+        completed: CompletedProcess[str] = subprocess.run(
             [
                 sys.executable,
                 "-c",

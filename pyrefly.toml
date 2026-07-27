@@ -1,3 +1,10 @@
 python-interpreter-path = ".venv/bin/python"
 search-path = ["."]
 site-package-path = []
+
+check-unannotated-defs = true
+infer-return-types = "checked"
+return-types = true
+parameter-types = true
+imports = true
+containers = true

@@ -31,6 +31,8 @@ from .scaffold import (
 from .tags import full_tag, platform_tag
 
 if TYPE_CHECKING:
+    from typer._click import core
+
     from .probe import BinaryInfo
 
 app = typer.Typer(
@@ -110,6 +112,7 @@ def root(
         bool,
         typer.Option(
             "--version",
+            "-v",
             callback=_version_callback,
             is_eager=True,
             help="Show the wheelbarrow version and exit.",
@@ -138,14 +141,14 @@ def fetch_command(
             "--pattern",
             "-p",
             help="Glob of asset names to download, e.g. `*-apple-darwin.tar.gz`. "
-            "Repeatable. Omitted, every asset wheelbarrow can build from is "
+            "Repeatable. When omitted, every asset wheelbarrow can build from is "
             "downloaded -- installers, signatures and checksum files are "
             "always skipped.",
         ),
     ] = None,
     list_assets: Annotated[
         bool,
-        typer.Option("--list", help="Show the release's assets and exit."),
+        typer.Option("--list", "-l", help="Show the release's assets and exit."),
     ] = False,
     extract_archives: Annotated[
         bool,
@@ -158,11 +161,12 @@ def fetch_command(
         bool,
         typer.Option(
             "--allow-unverified",
+            "-U",
             help="Download assets for which no checksum is published.",
         ),
     ] = False,
     timeout: Annotated[
-        float, typer.Option("--timeout", help="Per-request timeout in seconds.")
+        float, typer.Option("--timeout", "-T", help="Per-request timeout in seconds.")
     ] = fetch.DEFAULT_TIMEOUT,
 ) -> None:
     """Download release assets from GitHub and check them against their checksums.
@@ -557,26 +561,35 @@ def build_command(
         str, typer.Option("--description", "-d", help="One-line package summary.")
     ] = "",
     licence_: Annotated[
-        str | None, typer.Option("--licence", help="License expression, e.g. `MIT`.")
+        str | None,
+        typer.Option(
+            "--licence", "--license", "-L", help="License expression, e.g. `MIT`."
+        ),
     ] = None,
-    author: Annotated[str | None, typer.Option("--author", help="Author name.")] = None,
+    author: Annotated[
+        str | None, typer.Option("--author", "-N", help="Author name.")
+    ] = None,
     author_email: Annotated[
-        str | None, typer.Option("--author-email", help="Author email.")
+        str | None, typer.Option("--author-email", "-E", help="Author email.")
     ] = None,
     homepage: Annotated[
-        str | None, typer.Option("--homepage", help="Project homepage URL.")
+        str | None, typer.Option("--homepage", "-H", help="Project homepage URL.")
     ] = None,
     keyword: Annotated[
         list[str] | None,
-        typer.Option("--keyword", help="Package keyword. Repeatable."),
+        typer.Option("--keyword", "-K", help="Package keyword. Repeatable."),
     ] = None,
     requires_python: Annotated[
-        str, typer.Option("--requires-python", help="Python requirement for the wheel.")
+        str,
+        typer.Option(
+            "--requires-python", "-R", help="Python requirement for the wheel."
+        ),
     ] = ">=3.8",
     platform_tag_override: Annotated[
         str | None,
         typer.Option(
             "--platform-tag",
+            "-t",
             help="Use this platform tag verbatim instead of detecting one, "
             "e.g. `manylinux_2_17_x86_64`.",
         ),
@@ -597,6 +610,7 @@ def build_command(
         Launcher,
         typer.Option(
             "--launcher",
+            "-l",
             help="**direct** installs the binary straight onto `PATH` "
             "(no Python startup cost). **shim** exposes a console script that "
             "`execv`s a binary kept inside the package.",
@@ -606,17 +620,21 @@ def build_command(
         Path | None,
         typer.Option(
             "--keep-project",
+            "-k",
             help="Write the generated project here instead of discarding it.",
         ),
     ] = None,
     isolated: Annotated[
         bool,
-        typer.Option("--isolated", help="Build in an isolated PEP 517 environment."),
+        typer.Option(
+            "--isolated", "-i", help="Build in an isolated PEP 517 environment."
+        ),
     ] = False,
     overwrite: Annotated[
         bool,
         typer.Option(
             "--overwrite",
+            "-w",
             help="Replace an existing wheel of the same name in **--output** "
             "instead of failing.",
         ),
@@ -625,6 +643,7 @@ def build_command(
         bool,
         typer.Option(
             "--check-name/--no-check-name",
+            "-c/-C",
             help="Ask PyPI whether **--name** is already registered, and warn "
             "if it is. Advisory only; never fails the build.",
         ),
@@ -922,18 +941,26 @@ def publish_command(
     wheels: Annotated[list[Path], typer.Argument(help="Wheel files to upload.")],
     index: Annotated[
         str | None,
-        typer.Option(help="Named index from your uv configuration."),
+        typer.Option("--index", "-i", help="Named index from your uv configuration."),
     ] = None,
     publish_url: Annotated[
         str | None,
-        typer.Option(help="Upload URL of the target index."),
+        typer.Option("--publish-url", "-u", help="Upload URL of the target index."),
     ] = None,
     username: Annotated[
-        str | None, typer.Option(help="Username for the index.")
+        str | None,
+        typer.Option(
+            "--username",
+            "-U",
+            help="Username for the index."
+            "Password must be provided via environment variable."
+            "PyPI does not support username/password authentication."
+            "This option is only made available for compatibility with other indices.",
+        ),
     ] = None,
     dry_run: Annotated[
         bool,
-        typer.Option(help="Show the uv command without running it."),
+        typer.Option("--dry-run", "-d", help="Show the uv command without running it."),
     ] = False,
     yes: Annotated[
         bool, typer.Option("--yes", "-y", help="Skip the confirmation prompt.")
@@ -941,8 +968,8 @@ def publish_command(
 ) -> None:
     """Upload built wheels with `uv publish`.
 
-    The API token is read from `UV_PUBLISH_TOKEN` in the environment; there is
-    no option for it, so it cannot end up in your shell history.
+    The API token/password is read from `UV_PUBLISH_TOKEN` in the environment; there is
+    no CLI option for it, to protect against leaking it into shell history.
 
     Publishing is permanent: PyPI does not allow re-uploading a version that
     has already been released, so wheelbarrow asks for confirmation first.
@@ -1053,7 +1080,7 @@ def help_command(
     # ctx is this command's own context; its parent is the top-level group,
     # which owns both the root help text and the table of subcommands.
     # Left unannotated: `parent` is typed as click's base Context, not typer's.
-    root_ctx = ctx.parent or ctx
+    root_ctx: typer.Context | core.Context = ctx.parent or ctx
     if command is None:
         _show_help(root_ctx)
         return
