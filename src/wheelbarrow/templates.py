@@ -177,8 +177,8 @@ README: Final[Template] = Template(
 `$binary_name` packaged as a Python wheel, so it can be installed with any
 Python package manager:
 
-```console
-uv tool install $dist_name
+```zsh
+uv tool install $dist_name@latest
 # or
 pipx install $dist_name
 # or

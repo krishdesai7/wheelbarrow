@@ -17,5 +17,9 @@ class BuildError(WheelbarrowError):
     """The build backend failed to produce a wheel."""
 
 
+class FetchError(WheelbarrowError):
+    """A release asset could not be found, downloaded, verified or extracted."""
+
+
 class PublishError(WheelbarrowError):
     """Publishing the built distributions failed."""

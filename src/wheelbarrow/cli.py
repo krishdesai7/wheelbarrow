@@ -5,11 +5,19 @@ from typing import Annotated, Protocol
 
 import typer
 from rich.console import Console
+from rich.progress import (
+    BarColumn,
+    DownloadColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+)
 from rich.table import Table
 
-from . import __version__, pypi
+from . import __version__, fetch, pypi
 from .builder import BuildResult, build_package
 from .errors import WheelbarrowError
+from .fetch import Asset, FetchedAsset, Release, Verification
 from .probe import BinaryInfo, inspect_binary
 from .publish import PublishPlan, plan_publish, resolve_token, run_publish
 from .pypi import NameStatus
@@ -75,6 +83,201 @@ def root(
     ] = False,
 ) -> None:
     """Package prebuilt command line tools as Python wheels."""
+
+
+@app.command("fetch", no_args_is_help=True)
+def fetch_command(
+    source: Annotated[
+        str,
+        typer.Argument(
+            help="Release URL, or `owner/repo` for the latest release.",
+        ),
+    ],
+    dest: Annotated[Path, typer.Argument(help="Directory to download into.")] = Path(
+        "."
+    ),
+    tag: Annotated[
+        str | None,
+        typer.Option("--tag", "-t", help="Release tag, if **SOURCE** has none."),
+    ] = None,
+    pattern: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--pattern",
+            "-p",
+            help="Glob of asset names to download, e.g. `*-apple-darwin.tar.gz`. "
+            "Repeatable. Omitted, every asset is downloaded.",
+        ),
+    ] = None,
+    list_assets: Annotated[
+        bool,
+        typer.Option("--list", help="Show the release's assets and exit."),
+    ] = False,
+    extract_archives: Annotated[
+        bool,
+        typer.Option(
+            "--extract/--no-extract",
+            help="Unpack each downloaded archive beside it.",
+        ),
+    ] = True,
+    allow_unverified: Annotated[
+        bool,
+        typer.Option(
+            "--allow-unverified",
+            help="Download assets for which no checksum is published.",
+        ),
+    ] = False,
+    timeout: Annotated[
+        float, typer.Option("--timeout", help="Per-request timeout in seconds.")
+    ] = fetch.DEFAULT_TIMEOUT,
+) -> None:
+    """Download release assets from GitHub and check them against their checksums.
+
+    Every asset is verified before it is unpacked, preferring the digest GitHub
+    records for it and falling back to a checksum file in the same release.
+    Anything that fails is deleted rather than left on disk.
+
+    A token is read from `GH_TOKEN` or `GITHUB_TOKEN` when set, for private
+    repositories and the larger rate limit; public releases need none.
+
+    Example:
+
+        wheelbarrow fetch https://github.com/starship/starship/releases/tag/v1.26.0 ~/starship -p '*-unknown-linux-musl.tar.gz'
+    """
+    try:
+        release: Release = _resolve_release(source, tag, timeout=timeout)
+        chosen: list[Asset] = fetch.select_assets(release, list(pattern or ()))
+    except WheelbarrowError as exc:
+        raise _fail(str(exc)) from exc
+
+    console.print(
+        f"[bold]{release.slug}[/] [dim]{release.tag}[/] "
+        f"[dim]-- {len(chosen)} of {len(release.assets)} assets selected[/]"
+    )
+
+    if list_assets:
+        _print_assets(release, chosen)
+        return
+
+    try:
+        results: list[FetchedAsset] = _run_fetch(
+            release,
+            chosen,
+            dest,
+            extract_archives=extract_archives,
+            allow_unverified=allow_unverified,
+            timeout=timeout,
+        )
+    except WheelbarrowError as exc:
+        raise _fail(str(exc)) from exc
+
+    _report_fetched(results, dest)
+
+
+def _resolve_release(source: str, tag: str | None, *, timeout: float) -> Release:
+    """Look up the release named by `source`, reconciling it with `--tag`."""
+    owner: str
+    repo: str
+    from_url: str | None
+    owner, repo, from_url = fetch.parse_source(source)
+
+    if tag and from_url and tag != from_url:
+        raise WheelbarrowError(
+            f"{source} names release {from_url}, but --tag says {tag}. "
+            f"Drop one of them."
+        )
+
+    return fetch.get_release(
+        owner, repo, tag or from_url, timeout=timeout, token=fetch.resolve_token()
+    )
+
+
+def _print_assets(release: Release, chosen: list[Asset]) -> None:
+    """List the release's assets, marking which ones would be downloaded."""
+    selected: set[str] = {a.name for a in chosen}
+    table = Table(box=None, pad_edge=False)
+    table.add_column("", style="green")
+    table.add_column("asset")
+    table.add_column("size", justify="right", style="dim")
+    table.add_column("digest", style="dim")
+
+    for asset in release.assets:
+        if fetch.is_checksum_asset(asset.name):
+            continue
+        table.add_row(
+            "*" if asset.name in selected else "",
+            asset.name,
+            _human_size(asset.size),
+            "recorded" if asset.digest else "-",
+        )
+
+    console.print(table)
+    if any(not a.digest for a in release.assets):
+        console.print(
+            "[dim]note: assets showing no recorded digest are checked against "
+            "a checksum file in the release instead, if it publishes one.[/]"
+        )
+
+
+def _run_fetch(
+    release: Release,
+    chosen: list[Asset],
+    dest: Path,
+    *,
+    extract_archives: bool,
+    allow_unverified: bool,
+    timeout: float,
+) -> list[FetchedAsset]:
+    """Download `chosen` behind a progress bar spanning the whole set."""
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[dim]{task.description}[/]"),
+        BarColumn(),
+        DownloadColumn(),
+        console=console,
+        transient=True,
+    ) as progress:
+        task = progress.add_task("", total=sum(a.size for a in chosen) or None)
+
+        def started(asset: Asset, _verification: Verification | None) -> None:
+            progress.update(task, description=asset.name)
+
+        return fetch.fetch_assets(
+            release,
+            chosen,
+            dest,
+            extract_archives=extract_archives,
+            allow_unverified=allow_unverified,
+            timeout=timeout,
+            token=fetch.resolve_token(),
+            on_start=started,
+            on_chunk=lambda size: progress.advance(task, size),
+        )
+
+
+def _report_fetched(results: list[FetchedAsset], dest: Path) -> None:
+    """Summarise what landed on disk, and point at what `build` can consume."""
+    for result in results:
+        source: str = (
+            result.verification.source if result.verification else "not verified"
+        )
+        mark: str = "[green]ok[/]" if result.verified else "[yellow]??[/]"
+        console.print(
+            f"  {mark} {result.asset.name} "
+            f"[dim]({_human_size(result.asset.size)}, {source})[/]"
+        )
+
+    executables: list[Path] = [p for r in results for p in r.executables]
+    console.print(
+        f"[bold green]fetched[/] {len(results)} asset(s) into {dest}"
+        + (f", {len(executables)} executable(s) extracted" if executables else "")
+    )
+
+    if executables:
+        console.print("[dim]  build one with:[/]")
+        console.print(
+            f"[dim]    wheelbarrow build {executables[0]} -n <name> -V <version>[/]"
+        )
 
 
 @app.command("inspect", no_args_is_help=True)
