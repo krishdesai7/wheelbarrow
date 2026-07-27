@@ -42,6 +42,25 @@ raising, so builds keep working offline, and a `TAKEN` name is a warning, never 
 cannot distinguish your own project from someone else's). Tests stub `urlopen`; never let the
 suite make a real request.
 
+A platform tag states where an installer may *place* a wheel, not where the code can run — the two
+come apart for a statically linked ELF, which needs no libc at all. `_linux_tag` therefore emits a
+PEP 425 compressed tag set for `libc == "static"` (`manylinux_..._<arch>.musllinux_1_2_<arch>`):
+manylinux alone would withhold it from Alpine, musllinux alone from glibc users on architectures
+with no glibc build. `wheelfix.expand_tags` exists because the file name compresses the set but
+`WHEEL` and `WHEEL.json` take it expanded, one entry per tag.
+
+The manylinux floor for a *dynamic* glibc binary is measured, not defaulted: `probe._elf_glibc_min`
+reads `.gnu.version_r` for the highest `GLIBC_x.y` imported. `tags._glibc_baseline` takes the max of
+that and `DEFAULT_GLIBC` — a measurement may only raise the floor, since importing nothing newer
+than 2.5 is not evidence a binary runs on a 2.5 system. Getting this wrong by one version is not
+cosmetic: RHEL 7 is exactly 2.17.
+
+`builder._place_wheel` is what stops two inputs that resolve to one tag from silently overwriting
+each other in `-o`. It relies on the reproducibility invariant: identical bytes are a rebuild and
+pass, differing bytes are an error unless `--overwrite`. It is also why `build_package` builds into
+a temp dir and only then places the finished wheel — nothing half-built or wrongly tagged should
+ever appear somewhere the user might later `publish dist/*.whl`.
+
 ELF does not imply Linux. `_parse_elf` reads `EI_OSABI` (byte 7) and maps it through `ELF_OSABI`;
 only 0 (SysV) and 3 (GNU) are Linux, and 0 is what Linux toolchains actually emit, so that byte can
 rule Linux out but never confirm it. `tags.platform_tag` then refuses anything else by name, because
