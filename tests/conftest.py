@@ -22,6 +22,55 @@ MUSL_INTERP: Final[bytes] = b"/lib/ld-musl-x86_64.so.1\x00"
 PT_INTERP: Final[int] = 3
 
 
+SHT_STRTAB: Final[int] = 3
+SHT_GNU_VERNEED: Final[int] = 0x6FFFFFFE
+
+
+def make_verneed(endian: str, versions: list[str]) -> tuple[bytes, bytes]:
+    """Assemble a `.gnu.version_r` section and the string table it points into.
+
+    One `Verneed` for `libc.so.6`, carrying one `Vernaux` per symbol version.
+    Both records are a fixed 16 bytes in either ELF class.
+    """
+    strtab = bytearray(b"\x00")
+
+    def intern(text: str) -> int:
+        offset: int = len(strtab)
+        strtab.extend(text.encode() + b"\x00")
+        return offset
+
+    file_name: int = intern("libc.so.6")
+    aux = b""
+    for index, version in enumerate(versions):
+        name: int = intern(version)
+        next_aux: int = 0x10 if index + 1 < len(versions) else 0
+        # vna_hash, vna_flags, vna_other, vna_name, vna_next
+        aux += struct.pack(f"{endian}IHHII", 0, 0, 0, name, next_aux)
+
+    # vn_version, vn_cnt, vn_file, vn_aux, vn_next
+    verneed: bytes = (
+        struct.pack(f"{endian}HHIII", 1, len(versions), file_name, 0x10, 0) + aux
+    )
+    return verneed, bytes(strtab)
+
+
+def make_section_headers(
+    endian: str, bits: int, entries: list[tuple[int, int, int, int]]
+) -> bytes:
+    """Pack section headers from (type, offset, size, link) tuples."""
+    out = b""
+    for sh_type, offset, size, link in entries:
+        if bits == 0x40:
+            out += struct.pack(
+                f"{endian}IIQQQQIIQQ", 0, sh_type, 0, 0, offset, size, link, 0, 1, 0
+            )
+        else:
+            out += struct.pack(
+                f"{endian}IIIIIIIIII", 0, sh_type, 0, 0, offset, size, link, 0, 1, 0
+            )
+    return out
+
+
 def make_elf(
     machine: int,
     *,
@@ -29,10 +78,13 @@ def make_elf(
     little: bool = True,
     interp: bytes | None = GLIBC_INTERP,
     osabi: int = 0,
+    glibc_versions: list[str] | None = None,
 ) -> bytes:
     """Assemble a minimal but well-formed ELF image.
 
     `osabi` is `EI_OSABI`; 0 is what Linux toolchains emit, and 9 is FreeBSD.
+    `glibc_versions` adds a `.gnu.version_r` section declaring those symbol
+    versions, which is what decides the manylinux floor.
     """
     endian: Literal["<", ">"] = "<" if little else ">"
     ei_class: Literal[1, 2] = 2 if bits == 0x40 else 1
@@ -40,13 +92,37 @@ def make_elf(
     ident += b"\x00" * 8
 
     if bits == 0x40:
-        ehsize, phentsize = 0x40, 0x38
+        ehsize, phentsize, shentsize = 0x40, 0x38, 0x40
     else:
-        ehsize, phentsize = 0x34, 0x20
+        ehsize, phentsize, shentsize = 0x34, 0x20, 0x28
 
     phnum: Literal[0, 1] = 1 if interp else 0
     phoff: Literal[0, 0x34, 0x40] = ehsize if interp else 0
     interp_off: int = ehsize + phentsize
+
+    # Laid out after the program headers, so the offsets below are absolute.
+    body_size: int = (phentsize + len(interp)) if interp else 0
+    versions_blob = b""
+    shoff = shnum = 0
+    if glibc_versions is not None:
+        verneed, strtab = make_verneed(endian, glibc_versions)
+        verneed_off: int = ehsize + body_size
+        strtab_off: int = verneed_off + len(verneed)
+        shoff = strtab_off + len(strtab)
+        shnum = 3  # the mandatory null header, then ours
+        versions_blob = (
+            verneed
+            + strtab
+            + make_section_headers(
+                endian,
+                bits,
+                [
+                    (0, 0, 0, 0),
+                    (SHT_GNU_VERNEED, verneed_off, len(verneed), 2),
+                    (SHT_STRTAB, strtab_off, len(strtab), 0),
+                ],
+            )
+        )
 
     if bits == 0x40:
         header = ident + struct.pack(
@@ -56,13 +132,13 @@ def make_elf(
             1,  # e_version
             0x400000,  # e_entry
             phoff,
-            0,  # e_shoff
+            shoff,
             0,  # e_flags
             ehsize,
             phentsize,
             phnum,
-            64,  # e_shentsize
-            0,  # e_shnum
+            shentsize,
+            shnum,
             0,  # e_shstrndx
         )
     else:
@@ -73,13 +149,13 @@ def make_elf(
             1,
             0x8048000,
             phoff,
-            0,
+            shoff,
             0,
             ehsize,
             phentsize,
             phnum,
-            40,
-            0,
+            shentsize,
+            shnum,
             0,
         )
 
@@ -111,7 +187,7 @@ def make_elf(
             )
         body += interp
 
-    return header + body + b"\x00" * 256
+    return header + body + versions_blob + b"\x00" * 256
 
 
 def make_macho(cputype: int, *, minos: tuple[int, int] = (11, 0)) -> bytes:
@@ -172,6 +248,8 @@ def write_binary(tmp_path: Path) -> Callable[[str, bytes, Mode], Path]:
 
     def _write(name: str, data: bytes, mode: Mode = Mode.DATA) -> Path:
         path = tmp_path / name
+        # `name` may carry a directory, for tests needing two same-named files.
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
         path.chmod(mode)
         return path

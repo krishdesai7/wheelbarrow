@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from wheelbarrow.builder import BuildResult, build_package
+from wheelbarrow.errors import BuildError
 from wheelbarrow.probe import BinaryInfo, inspect_binary
 from wheelbarrow.scaffold import (
     Launcher,
@@ -35,17 +36,24 @@ if TYPE_CHECKING:
 
 
 def build(
-    binary: Path, out: Path, *, keep_project: Path | None = None, **overrides
+    binary: Path,
+    out: Path,
+    *,
+    keep_project: Path | None = None,
+    overwrite: bool = False,
+    **overrides,
 ) -> BuildResult:
     info: BinaryInfo = inspect_binary(binary)
     spec: PackageSpec = make_spec(
         name=overrides.pop("name", "demo-bin"),
         version=overrides.pop("version", "1.2.3"),
         binary_name=binary.name,
-        platform_tag=platform_tag(info),
+        platform_tag=overrides.pop("platform_tag", None) or platform_tag(info),
         **overrides,
     )
-    return build_package(binary, spec, out, keep_project=keep_project)
+    return build_package(
+        binary, spec, out, keep_project=keep_project, overwrite=overwrite
+    )
 
 
 def entry_mode(info: zipfile.ZipInfo) -> int:
@@ -286,6 +294,94 @@ class TestWheelJsonRewrite:
         assert payload["unknown-key"] == "preserved"
         # The whole point of rewriting WHEEL.json: the two must agree.
         assert f"Root-Is-Purelib: {str(pure).lower()}" in meta
+
+
+class TestOutputCollisions:
+    """Two inputs can resolve to one tag; the second must not win silently."""
+
+    def test_a_differing_wheel_of_the_same_name_is_refused(
+        self, write_binary, tmp_path
+    ) -> None:
+        """A glibc build and a static build both answer to manylinux."""
+        dist = tmp_path / "dist"
+        build(write_binary("a/tool", make_elf(0x3E)), dist, platform_tag="linux_x86_64")
+        second = write_binary("b/tool", make_elf(0x3E) + b"different")
+
+        with pytest.raises(BuildError, match="already exists"):
+            build(second, dist, platform_tag="linux_x86_64")
+
+    def test_the_first_wheel_is_left_intact(self, write_binary, tmp_path) -> None:
+        dist = tmp_path / "dist"
+        first = build(
+            write_binary("a/tool", make_elf(0x3E)), dist, platform_tag="linux_x86_64"
+        )
+        original = first.wheel.read_bytes()
+
+        with pytest.raises(BuildError):
+            build(
+                write_binary("b/tool", make_elf(0x3E) + b"different"),
+                dist,
+                platform_tag="linux_x86_64",
+            )
+        assert first.wheel.read_bytes() == original
+
+    def test_an_identical_rebuild_is_not_a_collision(
+        self, write_binary, tmp_path
+    ) -> None:
+        """Builds are reproducible, so the same input twice is a no-op."""
+        binary = write_binary("tool", make_elf(0x3E))
+        dist = tmp_path / "dist"
+        first = build(binary, dist).wheel.read_bytes()
+        assert build(binary, dist).wheel.read_bytes() == first
+
+    def test_overwrite_allows_it(self, write_binary, tmp_path) -> None:
+        dist = tmp_path / "dist"
+        build(write_binary("a/tool", make_elf(0x3E)), dist, platform_tag="linux_x86_64")
+        result = build(
+            write_binary("b/tool", make_elf(0x3E) + b"different"),
+            dist,
+            platform_tag="linux_x86_64",
+            overwrite=True,
+        )
+        assert result.wheel.is_file()
+
+    def test_no_intermediate_wheel_is_left_in_the_output(
+        self, write_binary, tmp_path
+    ) -> None:
+        """The backend's untagged `py3-none-any` must never reach `dist/`."""
+        dist = tmp_path / "dist"
+        build(write_binary("tool", make_elf(0x3E)), dist)
+        assert [p.name for p in dist.iterdir()] == [
+            "demo_bin-1.2.3-py3-none-manylinux_2_17_x86_64.whl"
+        ]
+
+
+class TestCompressedTagSets:
+    """A static binary claims both libc families, in one wheel."""
+
+    @pytest.fixture
+    def built(self, write_binary, tmp_path) -> BuildResult:
+        # No PT_INTERP: statically linked, so it satisfies glibc and musl both.
+        return build(write_binary("tool", make_elf(0x3E, interp=None)), tmp_path / "d")
+
+    def test_the_file_name_carries_the_compressed_set(self, built) -> None:
+        assert built.wheel.name == (
+            "demo_bin-1.2.3-py3-none-manylinux_2_17_x86_64.musllinux_1_2_x86_64.whl"
+        )
+
+    def test_wheel_metadata_expands_it_to_one_tag_per_line(self, built) -> None:
+        """PEP 427 takes the expanded form here, unlike the file name."""
+        with zipfile.ZipFile(built.wheel) as zf:
+            text = zf.read("demo_bin-1.2.3.dist-info/WHEEL").decode()
+        assert "Tag: py3-none-manylinux_2_17_x86_64" in text
+        assert "Tag: py3-none-musllinux_1_2_x86_64" in text
+        assert text.count("Tag:") == 2
+        assert "Root-Is-Purelib: false" in text
+
+    def test_the_wheel_is_still_installable_and_correct(self, built) -> None:
+        with zipfile.ZipFile(built.wheel) as zf:
+            assert zf.testzip() is None
+            assert archive_executables(built.spec) <= set(zf.namelist())
 
 
 class TestReproducibility:

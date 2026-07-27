@@ -9,8 +9,17 @@ from wheelbarrow.probe import BinaryInfo
 from wheelbarrow.tags import full_tag, platform_tag
 
 
-def linux(arch: str, libc: str = "glibc") -> BinaryInfo:
-    return BinaryInfo(path=Path(), format="elf", os="linux", arch=arch, libc=libc)
+def linux(
+    arch: str, libc: str = "glibc", glibc_min: tuple[int, int] | None = None
+) -> BinaryInfo:
+    return BinaryInfo(
+        path=Path(),
+        format="elf",
+        os="linux",
+        arch=arch,
+        libc=libc,
+        glibc_min=glibc_min,
+    )
 
 
 def macos(arch: str, minos: tuple[int, int] | None = None, slices=()) -> BinaryInfo:
@@ -54,9 +63,27 @@ class TestLinux:
     def test_musl_uses_musllinux(self) -> None:
         assert platform_tag(linux("x86_64", "musl")) == "musllinux_1_2_x86_64"
 
-    def test_static_binaries_use_the_manylinux_baseline(self) -> None:
-        # A static binary runs anywhere, so the lowest baseline is honest.
-        assert platform_tag(linux("x86_64", "static")) == "manylinux_2_17_x86_64"
+    def test_static_binaries_claim_both_libc_families(self) -> None:
+        """A tag says where an installer may place a wheel, not where the code
+        can run. pip on Alpine accepts only musllinux, so a manylinux-only tag
+        would withhold a static binary from the systems it best serves."""
+        assert (
+            platform_tag(linux("x86_64", "static"))
+            == "manylinux_2_17_x86_64.musllinux_1_2_x86_64"
+        )
+
+    @pytest.mark.parametrize("arch", ["aarch64", "i686", "armv7l", "riscv64"])
+    def test_both_halves_agree_on_the_architecture(self, arch) -> None:
+        many, musl = platform_tag(linux(arch, "static")).split(".")
+        assert many.endswith(f"_{arch}")
+        assert musl == f"musllinux_1_2_{arch}"
+
+    def test_dynamic_musl_stays_musl_only(self) -> None:
+        """It needs a musl loader, so manylinux would be a false claim."""
+        assert platform_tag(linux("x86_64", "musl")) == "musllinux_1_2_x86_64"
+
+    def test_dynamic_glibc_stays_manylinux_only(self) -> None:
+        assert platform_tag(linux("x86_64", "glibc")) == "manylinux_2_17_x86_64"
 
     @pytest.mark.parametrize("spelling", ["2.28", "2_28"])
     def test_glibc_override_accepts_both_spellings(self, spelling) -> None:
@@ -66,6 +93,35 @@ class TestLinux:
     def test_unknown_arch_is_rejected(self) -> None:
         with pytest.raises(InspectionError, match="no manylinux baseline"):
             platform_tag(linux("sparc64"))
+
+
+class TestMeasuredGlibcFloor:
+    """A measured requirement beats the default, but only upwards."""
+
+    def test_a_higher_requirement_raises_the_floor(self) -> None:
+        """The default 2.17 is exactly CentOS 7's glibc, so being one version
+        too low produces a wheel that installs there and dies at exec."""
+        info = linux("x86_64", "glibc", glibc_min=(2, 18))
+        assert platform_tag(info) == "manylinux_2_18_x86_64"
+
+    def test_a_lower_requirement_does_not_lower_the_floor(self) -> None:
+        """Importing nothing newer than 2.5 is not evidence that the binary
+        works on a 2.5 system; the rest of that platform has moved on too."""
+        info = linux("x86_64", "glibc", glibc_min=(2, 5))
+        assert platform_tag(info) == "manylinux_2_17_x86_64"
+
+    def test_the_comparison_is_numeric_not_lexicographic(self) -> None:
+        """`2.9` must not read as newer than `2.34`."""
+        assert platform_tag(linux("x86_64", "glibc", (2, 9))) == "manylinux_2_17_x86_64"
+        assert platform_tag(linux("x86_64", "glibc", (2, 34))) == "manylinux_2_34_x86_64"
+
+    def test_an_explicit_override_still_wins(self) -> None:
+        info = linux("x86_64", "glibc", glibc_min=(2, 34))
+        assert platform_tag(info, glibc_version="2.28") == "manylinux_2_28_x86_64"
+
+    def test_a_measured_floor_on_an_arch_with_no_default(self) -> None:
+        info = linux("sparc64", "glibc", glibc_min=(2, 30))
+        assert platform_tag(info) == "manylinux_2_30_sparc64"
 
 
 class TestMacos:

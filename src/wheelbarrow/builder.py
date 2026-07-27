@@ -80,15 +80,21 @@ def build_package(
     isolated: bool = False,
     verbose: bool = False,
     keep_project: Path | None = None,
+    overwrite: bool = False,
 ) -> BuildResult:
     """Scaffold, build and tag a wheel wrapping `binary`.
 
     The intermediate project is written to a temporary directory unless
     `keep_project` names somewhere to keep it, which is useful for debugging
     what was generated.
+
+    The wheel is built and retagged out of sight and only then placed in
+    `output_dir`, so a failure part-way cannot leave a half-finished or
+    wrongly tagged archive somewhere the caller might later publish.
     """
     binary = Path(binary)
     output_dir = Path(output_dir)
+    tag: str = full_tag(spec.platform_tag)
 
     with tempfile.TemporaryDirectory(prefix="wheelbarrow-") as tmp:
         project_root: Path = Path(tmp) / spec.dist_name
@@ -96,7 +102,7 @@ def build_package(
         scaffold_project(spec, binary, project_root)
 
         raw_wheel: Path = build_wheel(
-            project_root, output_dir, isolated=isolated, verbose=verbose
+            project_root, Path(tmp) / "wheel", isolated=isolated, verbose=verbose
         )
 
         kept: Path | None = None
@@ -106,13 +112,39 @@ def build_package(
                 shutil.rmtree(kept)
             shutil.copytree(project_root, kept)
 
-    tag: str = full_tag(spec.platform_tag)
-    result: RetagResult = retag_wheel(
-        raw_wheel,
-        tag=tag,
-        executable_paths=archive_executables(spec),
-    )
-    if not result.executables:  # pragma: no cover - defensive
-        raise BuildError("no executable entries were marked in the wheel")
+        result: RetagResult = retag_wheel(
+            raw_wheel,
+            tag=tag,
+            executable_paths=archive_executables(spec),
+        )
+        if not result.executables:  # pragma: no cover - defensive
+            raise BuildError("no executable entries were marked in the wheel")
 
-    return BuildResult(wheel=result.path, tag=tag, spec=spec, project_dir=kept)
+        placed: Path = _place_wheel(result.path, output_dir, overwrite=overwrite)
+
+    return BuildResult(wheel=placed, tag=tag, spec=spec, project_dir=kept)
+
+
+def _place_wheel(built: Path, output_dir: Path, *, overwrite: bool) -> Path:
+    """Move the finished wheel into `output_dir`, refusing to clobber.
+
+    Two inputs can resolve to one tag -- a glibc build and a static build of
+    the same tool both look like `manylinux_<baseline>_x86_64` -- and then the
+    second build overwrites the first with no sign that anything was lost.
+    Builds are reproducible, so identical bytes are treated as a harmless
+    rebuild; only a *differing* file already in place is an error.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    target: Path = output_dir / built.name
+    data: bytes = built.read_bytes()
+
+    if not overwrite and target.is_file() and target.read_bytes() != data:
+        raise BuildError(
+            f"{target.name} already exists in {output_dir} with different "
+            f"contents. Two builds resolving to the same platform tag will "
+            f"otherwise silently overwrite one another; check whether this "
+            f"input duplicates an earlier one, or pass --overwrite to replace it."
+        )
+
+    target.write_bytes(data)
+    return target

@@ -15,6 +15,7 @@ which contains no architecture to detect and is therefore reported as
 first line.
 """
 
+import re
 import struct
 from dataclasses import dataclass
 from pathlib import Path
@@ -96,6 +97,13 @@ LC_VERSION_MIN_MACOSX: Final[int] = 0x24
 LC_BUILD_VERSION: Final[int] = 0x32
 PT_INTERP: Final[int] = 0x03
 
+#: Section holding the versioned symbols a dynamic binary imports.
+SHT_GNU_VERNEED: Final[int] = 0x6FFFFFFE
+
+#: Symbol version names look like `GLIBC_2.18`; only the first two components
+#: matter, because that is all a manylinux tag can express.
+GLIBC_VERSION_RE: Final[re.Pattern[bytes]] = re.compile(rb"GLIBC_(\d+)\.(\d+)")
+
 
 @dataclass(frozen=True)
 class BinaryInfo:
@@ -106,6 +114,7 @@ class BinaryInfo:
     os: str  # "linux" | "macos" | "windows" | "any"
     arch: str  # Normalised architecture name, e.g. "x86_64"; "any" for a script
     libc: str | None = None  # "glibc" | "musl" | "static" (Linux only)
+    glibc_min: tuple[int, int] | None = None  # Highest GLIBC_ symbol imported
     macos_min: tuple[int, int] | None = None
     slices: tuple[str, ...] = ()  # Architectures in a universal binary
     interpreter: str | None = None  # Shebang command, scripts only
@@ -124,6 +133,8 @@ class BinaryInfo:
         bits: list[str] = [f"{self.format}", f"{self.os}/{self.arch}"]
         if self.libc:
             bits.append(f"libc={self.libc}")
+        if self.glibc_min:
+            bits.append(f"glibc>={self.glibc_min[0]}.{self.glibc_min[1]}")
         if self.macos_min:
             bits.append(f"minos={self.macos_min[0]}.{self.macos_min[1]}")
         if self.is_universal:
@@ -231,7 +242,19 @@ def _parse_elf(path: Path, head: bytes) -> BinaryInfo:
     libc: str | None = (
         _elf_libc(path, head, ei_class, endian) if os_name == "linux" else None
     )
-    return BinaryInfo(path=path, format="elf", os=os_name, arch=arch, libc=libc)
+    # Only a glibc binary imports versioned glibc symbols; static and musl
+    # builds have no `.gnu.version_r` to read, and no floor to report.
+    glibc_min: tuple[int, int] | None = (
+        _elf_glibc_min(path, head, ei_class, endian) if libc == "glibc" else None
+    )
+    return BinaryInfo(
+        path=path,
+        format="elf",
+        os=os_name,
+        arch=arch,
+        libc=libc,
+        glibc_min=glibc_min,
+    )
 
 
 def _elf_libc(path: Path, head: bytes, ei_class: int, endian: str) -> str:
@@ -279,6 +302,101 @@ def _elf_libc(path: Path, head: bytes, ei_class: int, endian: str) -> str:
     except OSError, struct.error:
         return "glibc"  # be conservative: assume the stricter requirement
     return "static"
+
+
+def _elf_glibc_min(
+    path: Path, head: bytes, ei_class: int, endian: str
+) -> tuple[int, int] | None:
+    """Highest `GLIBC_x.y` symbol version the binary imports, if any.
+
+    This is what actually decides the manylinux floor. Without it the tag is a
+    guess, and a guess one version too low produces a wheel that installs
+    happily and then dies at exec with `version GLIBC_2.18 not found`.
+
+    The requirement is recorded in `.gnu.version_r`, whose `Vernaux` entries
+    name the versions needed from each shared library. Reading the section is
+    cheap and exact; scanning the whole file for the same strings is neither,
+    since unrelated data can spell them too. Any failure returns `None` and
+    leaves the caller on its default.
+    """
+    try:
+        section: tuple[bytes, bytes] | None = _elf_verneed(
+            path, head, ei_class, endian
+        )
+        if section is None:
+            return None
+        verneed, strtab = section
+
+        versions: list[tuple[int, int]] = []
+        offset = 0
+        # Verneed and Vernaux are fixed 16-byte records in both ELF classes.
+        while offset + 0x10 <= len(verneed):
+            _, count, _, aux, next_entry = struct.unpack_from(
+                f"{endian}HHIII", verneed, offset
+            )
+            aux_offset: int = offset + aux
+            for _ in range(min(count, 0x100)):
+                if aux_offset + 0x10 > len(verneed):
+                    break
+                # Vernaux: hash(4) flags(2) other(2) name(4) next(4).
+                name, next_aux = struct.unpack_from(
+                    f"{endian}II", verneed, aux_offset + 0x08
+                )
+                match = GLIBC_VERSION_RE.match(strtab, name)
+                if match:
+                    versions.append((int(match[1]), int(match[2])))
+                if not next_aux:
+                    break
+                aux_offset += next_aux
+            if not next_entry:
+                break
+            offset += next_entry
+    except OSError, struct.error:
+        return None
+    return max(versions) if versions else None
+
+
+def _elf_verneed(
+    path: Path, head: bytes, ei_class: int, endian: str
+) -> tuple[bytes, bytes] | None:
+    """Return the raw `.gnu.version_r` section and the string table it uses."""
+    if ei_class == 2:  # ELF64
+        e_shoff = struct.unpack_from(f"{endian}Q", head, 0x28)[0]
+        e_shentsize, e_shnum = struct.unpack_from(f"{endian}HH", head, 0x3A)
+        type_at, offset_at, size_at, link_at = 0x04, 0x18, 0x20, 0x28
+        word: str = "Q"
+    else:  # ELF32
+        e_shoff = struct.unpack_from(f"{endian}I", head, 0x20)[0]
+        e_shentsize, e_shnum = struct.unpack_from(f"{endian}HH", head, 0x2E)
+        type_at, offset_at, size_at, link_at = 0x04, 0x10, 0x14, 0x18
+        word = "I"
+
+    if not e_shoff or not e_shnum or e_shnum > 0x1000:
+        return None
+
+    with path.open("rb") as fh:
+        fh.seek(e_shoff)
+        table: bytes = fh.read(e_shentsize * e_shnum)
+        if len(table) < e_shentsize * e_shnum:
+            return None
+
+        def field(index: int, at: int, fmt: str) -> int:
+            return struct.unpack_from(f"{endian}{fmt}", table, index * e_shentsize + at)[
+                0
+            ]
+
+        for i in range(e_shnum):
+            if field(i, type_at, "I") != SHT_GNU_VERNEED:
+                continue
+            strtab_index: int = field(i, link_at, "I")
+            if strtab_index >= e_shnum:
+                return None
+            fh.seek(field(i, offset_at, word))
+            verneed: bytes = fh.read(field(i, size_at, word))
+            fh.seek(field(strtab_index, offset_at, word))
+            strtab: bytes = fh.read(field(strtab_index, size_at, word))
+            return verneed, strtab
+    return None
 
 
 def _parse_macho(path: Path, head: bytes, magic_be: int) -> BinaryInfo:

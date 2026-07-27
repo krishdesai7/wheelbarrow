@@ -82,15 +82,44 @@ def platform_tag(
 
 def _linux_tag(info: BinaryInfo, glibc_version: str | None) -> str:
     arch: str = info.arch
+    musl: str = f"musllinux_{DEFAULT_MUSL}_{arch}"
     if info.libc == "musl":
-        return f"musllinux_{DEFAULT_MUSL}_{arch}"
+        return musl
 
-    version: str | None = glibc_version or DEFAULT_GLIBC.get(arch)
+    version: str | None = glibc_version or _glibc_baseline(info)
     if version is None:
         raise InspectionError(
             f"no manylinux baseline known for {arch}; pass --platform-tag explicitly"
         )
-    return f"manylinux_{_normalise_glibc(version)}_{arch}"
+    many: str = f"manylinux_{_normalise_glibc(version)}_{arch}"
+    if info.libc != "static":
+        return many
+
+    # A static binary depends on no libc at all, so it satisfies both families.
+    # A tag is a statement about where installers may *place* the wheel, not
+    # about where the code can run: pip on Alpine accepts only musllinux, so
+    # tagging this manylinux alone would withhold the wheel from exactly the
+    # systems a static build exists to serve. PEP 425 compressed tag sets let
+    # one wheel say both, which is the only answer that is not a lie by
+    # omission.
+    return f"{many}.{musl}"
+
+
+def _glibc_baseline(info: BinaryInfo) -> str | None:
+    """The manylinux floor to claim when the caller did not name one.
+
+    A measured requirement can only raise the floor, never lower it. Needing
+    no symbol newer than 2.5 is not evidence that a binary works on a 2.5
+    system -- the rest of the platform has moved too -- so the default stays
+    a lower bound.
+    """
+    default: str | None = DEFAULT_GLIBC.get(info.arch)
+    if info.glibc_min is None:
+        return default
+    measured: str = f"{info.glibc_min[0]}_{info.glibc_min[1]}"
+    if default is None:
+        return measured
+    return max(measured, default, key=lambda v: tuple(map(int, v.split("_"))))
 
 
 def _normalise_glibc(version: str) -> str:

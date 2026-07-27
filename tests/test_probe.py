@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import struct
+
 import pytest
 
 from wheelbarrow.errors import InspectionError
@@ -111,6 +113,56 @@ class TestPe:
         path = write_binary("tool.exe", bytes(broken))
         with pytest.raises(InspectionError, match="without a PE signature"):
             inspect_binary(path)
+
+
+class TestGlibcFloor:
+    """The manylinux baseline is a measurement, not a default, when it can be."""
+
+    def test_the_highest_imported_version_wins(self, write_binary) -> None:
+        """Entries are in link order, not version order."""
+        image = make_elf(
+            0x3E, glibc_versions=["GLIBC_2.2.5", "GLIBC_2.18", "GLIBC_2.14"]
+        )
+        assert inspect_binary(write_binary("tool", image)).glibc_min == (2, 18)
+
+    def test_numeric_ordering_not_string_ordering(self, write_binary) -> None:
+        """`2.9` sorts after `2.34` as text, which would understate the floor."""
+        image = make_elf(0x3E, glibc_versions=["GLIBC_2.9", "GLIBC_2.34"])
+        assert inspect_binary(write_binary("tool", image)).glibc_min == (2, 34)
+
+    @pytest.mark.parametrize("bits", [32, 64])
+    def test_both_elf_classes(self, write_binary, bits) -> None:
+        image = make_elf(0x3E, bits=bits, glibc_versions=["GLIBC_2.28"])
+        assert inspect_binary(write_binary("tool", image)).glibc_min == (2, 28)
+
+    def test_big_endian_sections(self, write_binary) -> None:
+        image = make_elf(0x16, little=False, glibc_versions=["GLIBC_2.28"])
+        assert inspect_binary(write_binary("tool", image)).glibc_min == (2, 28)
+
+    def test_no_version_section_reports_nothing(self, write_binary) -> None:
+        """Absence must fall back to the default, not to zero."""
+        assert inspect_binary(write_binary("tool", make_elf(0x3E))).glibc_min is None
+
+    def test_non_glibc_versions_are_ignored(self, write_binary) -> None:
+        image = make_elf(0x3E, glibc_versions=["GCC_3.0", "GLIBC_2.17", "ZLIB_1.2.0"])
+        assert inspect_binary(write_binary("tool", image)).glibc_min == (2, 17)
+
+    def test_a_static_binary_is_not_probed(self, write_binary) -> None:
+        """It has no dynamic imports, so any section found is not a floor."""
+        image = make_elf(0x3E, interp=None, glibc_versions=["GLIBC_2.34"])
+        info = inspect_binary(write_binary("tool", image))
+        assert info.libc == "static"
+        assert info.glibc_min is None
+
+    def test_a_truncated_section_table_does_not_raise(self, write_binary) -> None:
+        """Detection is best-effort; a default is better than a crash."""
+        image = bytearray(make_elf(0x3E, glibc_versions=["GLIBC_2.28"]))
+        struct.pack_into("<Q", image, 0x28, 0xDEADBEEF)  # e_shoff into the void
+        assert inspect_binary(write_binary("tool", bytes(image))).glibc_min is None
+
+    def test_describe_reports_the_floor(self, write_binary) -> None:
+        image = make_elf(0x3E, glibc_versions=["GLIBC_2.18"])
+        assert "glibc>=2.18" in inspect_binary(write_binary("tool", image)).describe()
 
 
 class TestElfOsAbi:

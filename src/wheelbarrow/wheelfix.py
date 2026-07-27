@@ -164,6 +164,26 @@ def _render_record(records: list[tuple[str, str, int]], record_name: str) -> byt
     return out.getvalue().encode("utf-8")
 
 
+def expand_tags(tag: str) -> list[str]:
+    """Expand a PEP 425 compressed tag set into the individual tags.
+
+    A wheel *file name* may compress a set with dots, and a static binary makes
+    real use of that: `py3-none-manylinux_2_17_x86_64.musllinux_1_2_x86_64`.
+    `WHEEL` takes the expanded form instead, one `Tag:` per line, so this is
+    the cartesian product of the three dot-separated components.
+    """
+    parts: list[str] = tag.split("-")
+    if len(parts) != 3:  # pragma: no cover - defensive
+        return [tag]
+    python, abi, platform = parts
+    return [
+        f"{p}-{a}-{f}"
+        for p in python.split(".")
+        for a in abi.split(".")
+        for f in platform.split(".")
+    ]
+
+
 def _is_pure(tag: str) -> bool:
     """Whether `tag` claims no platform at all.
 
@@ -188,7 +208,8 @@ def _rewrite_wheel_metadata(data: bytes, tag: str) -> bytes:
     while kept and not kept[-1].strip():
         kept.pop()
     purelib: str = "true" if _is_pure(tag) else "false"
-    kept.extend((f"Root-Is-Purelib: {purelib}", f"Tag: {tag}"))
+    kept.append(f"Root-Is-Purelib: {purelib}")
+    kept.extend(f"Tag: {t}" for t in expand_tags(tag))
     return ("\n".join(kept) + "\n").encode("utf-8")
 
 
@@ -207,7 +228,7 @@ def _rewrite_wheel_json(data: bytes, tag: str) -> bytes:
     if not isinstance(payload, dict):
         return data
 
-    payload["tags"] = [tag]
+    payload["tags"] = expand_tags(tag)
     payload["root-is-purelib"] = _is_pure(tag)
     return json.dumps(payload, separators=(",", ":")).encode("utf-8")
 

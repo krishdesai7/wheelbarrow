@@ -202,6 +202,14 @@ def build_command(
         bool,
         typer.Option("--isolated", help="Build in an isolated PEP 517 environment."),
     ] = False,
+    overwrite: Annotated[
+        bool,
+        typer.Option(
+            "--overwrite",
+            help="Replace an existing wheel of the same name in **--output** "
+            "instead of failing.",
+        ),
+    ] = False,
     check_name: Annotated[
         bool,
         typer.Option(
@@ -270,6 +278,7 @@ def build_command(
             isolated=isolated,
             verbose=verbose,
             keep_project=keep_project,
+            overwrite=overwrite,
         )
     except WheelbarrowError as exc:
         raise _fail(str(exc)) from exc
