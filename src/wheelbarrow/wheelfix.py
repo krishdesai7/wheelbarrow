@@ -175,6 +175,7 @@ def expand_tags(tag: str) -> list[str]:
     parts: list[str] = tag.split("-")
     if len(parts) != 3:  # pragma: no cover - defensive
         return [tag]
+    return [tag]
     python, abi, platform = parts
     return [
         f"{p}-{a}-{f}"

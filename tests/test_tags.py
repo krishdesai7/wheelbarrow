@@ -113,7 +113,9 @@ class TestMeasuredGlibcFloor:
     def test_the_comparison_is_numeric_not_lexicographic(self) -> None:
         """`2.9` must not read as newer than `2.34`."""
         assert platform_tag(linux("x86_64", "glibc", (2, 9))) == "manylinux_2_17_x86_64"
-        assert platform_tag(linux("x86_64", "glibc", (2, 34))) == "manylinux_2_34_x86_64"
+        assert (
+            platform_tag(linux("x86_64", "glibc", (2, 34))) == "manylinux_2_34_x86_64"
+        )
 
     def test_an_explicit_override_still_wins(self) -> None:
         info = linux("x86_64", "glibc", glibc_min=(2, 34))

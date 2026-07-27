@@ -320,9 +320,7 @@ def _elf_glibc_min(
     leaves the caller on its default.
     """
     try:
-        section: tuple[bytes, bytes] | None = _elf_verneed(
-            path, head, ei_class, endian
-        )
+        section: tuple[bytes, bytes] | None = _elf_verneed(path, head, ei_class, endian)
         if section is None:
             return None
         verneed, strtab = section
@@ -381,9 +379,9 @@ def _elf_verneed(
             return None
 
         def field(index: int, at: int, fmt: str) -> int:
-            return struct.unpack_from(f"{endian}{fmt}", table, index * e_shentsize + at)[
-                0
-            ]
+            return struct.unpack_from(
+                f"{endian}{fmt}", table, index * e_shentsize + at
+            )[0]
 
         for i in range(e_shnum):
             if field(i, type_at, "I") != SHT_GNU_VERNEED:
