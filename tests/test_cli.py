@@ -17,7 +17,7 @@ ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
 @pytest.fixture(autouse=True)
-def wide_console(monkeypatch):
+def wide_console(monkeypatch) -> None:
     """Stop rich wrapping messages the assertions below match on.
 
     The consoles are module-level, so they take their width at import time --
@@ -202,6 +202,27 @@ class TestScriptSupport:
         )
         assert result.exit_code == 0
         assert "--platform-tag" not in everything_written(result)
+
+
+class TestInspectReporting:
+    """What the detailed single-file view has to show."""
+
+    def test_the_measured_glibc_floor_is_shown(self, write_binary) -> None:
+        """It decides the manylinux tag, so it must not be invisible."""
+        binary = write_binary("tool", make_elf(0x3E, glibc_versions=["GLIBC_2.18"]))
+        rendered = plain_output(run("inspect", str(binary)))
+        assert "glibc min" in rendered
+        assert "2.18" in rendered
+        assert "manylinux_2_18_x86_64" in rendered
+
+    def test_nothing_is_claimed_when_nothing_was_measured(self, write_binary) -> None:
+        binary = write_binary("tool", make_elf(0x3E))
+        assert "glibc min" not in plain_output(run("inspect", str(binary)))
+
+    def test_a_static_binary_shows_the_compressed_tag_set(self, write_binary) -> None:
+        binary = write_binary("tool", make_elf(0x3E, interp=None))
+        rendered = plain_output(run("inspect", str(binary)))
+        assert "manylinux_2_17_x86_64.musllinux_1_2_x86_64" in rendered
 
 
 class TestDirectoryInput:

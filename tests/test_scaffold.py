@@ -1,6 +1,7 @@
 """Tests for metadata normalisation, templating and asset staging."""
 
 import compileall
+import hashlib
 import stat
 import tomllib
 from typing import TYPE_CHECKING
@@ -8,16 +9,21 @@ from typing import TYPE_CHECKING
 import pytest
 
 from wheelbarrow.errors import MetadataError
+from wheelbarrow.probe import inspect_binary
 from wheelbarrow.scaffold import (
     SCRIPTS_DIR,
     Launcher,
     PackageSpec,
     archive_executables,
+    describe_input,
     make_spec,
+    render_readme,
     scaffold_project,
     stage_binary,
     staged_paths,
 )
+
+from .conftest import MUSL_INTERP, make_elf, make_fat_macho, make_macho, make_pe
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -334,3 +340,135 @@ class TestShimLauncher:
     def test_installed_name_keeps_the_source_file_name(self) -> None:
         s = spec(binary_name="bw-v10", aliases=["bw"], launcher=Launcher.SHIM)
         assert s.installed_name == "bw-v10"
+
+
+class TestProvenanceDescription:
+    """What the generated README says about the file it wraps."""
+
+    def describe(self, path, tag):
+        return describe_input(inspect_binary(path), path, tag)
+
+    def test_the_digest_is_of_the_file_as_packaged(self, write_binary) -> None:
+        """It exists to be checked against what the tool's publisher lists."""
+        data = make_elf(0x3E)
+        binary = write_binary("tool", data)
+        found = self.describe(binary, "manylinux_2_17_x86_64")
+        assert found.sha256 == hashlib.sha256(data).hexdigest()
+
+    @pytest.mark.parametrize(
+        ("data", "expected"),
+        [
+            (make_elf(0x3E), "ELF executable, linux/x86_64"),
+            (make_pe(0x8664), "PE executable, windows/x86_64"),
+            (make_macho(0x0100000C), "Mach-O executable, macos/arm64"),
+        ],
+    )
+    def test_the_format_is_named_in_prose(self, write_binary, data, expected) -> None:
+        """`BinaryInfo.describe` is for a terminal; this ends up on PyPI."""
+        found = self.describe(write_binary("tool", data), "any")
+        assert found.kind.startswith(expected)
+
+    def test_linkage_is_spelled_out(self, write_binary) -> None:
+        binary = write_binary("tool", make_elf(0x3E, interp=None))
+        assert "statically linked" in self.describe(binary, "any").kind
+
+    def test_a_script_names_its_interpreter(self, shell_script) -> None:
+        found = self.describe(shell_script, "any")
+        assert found.kind == "script run by `/bin/sh`"
+
+    def test_the_macos_floor_is_carried_over(self, write_binary) -> None:
+        binary = write_binary("tool", make_macho(0x0100000C, minos=(12, 3)))
+        assert "macOS 12.3+" in self.describe(binary, "macosx_12_3_arm64").kind
+
+
+class TestProvenanceTagNotes:
+    """The tag is glossed, but only where it and the binary agree."""
+
+    def note(self, path, tag) -> str:
+        return describe_input(inspect_binary(path), path, tag).note
+
+    def test_a_script_is_told_its_tag_promises_too_much(self, shell_script) -> None:
+        """The one thing an installer needs to know, and the tag cannot say it."""
+        note = self.note(shell_script, "any")
+        assert "/bin/sh" in note
+        assert "install anywhere" in note
+
+    def test_a_static_binary_explains_the_compressed_set(self, write_binary) -> None:
+        binary = write_binary("tool", make_elf(0x3E, interp=None))
+        note = self.note(binary, "manylinux_2_17_x86_64.musllinux_1_2_x86_64")
+        assert "no C library" in note
+        assert "Alpine" in note
+
+    def test_a_glibc_binary_quotes_the_floor_from_the_tag(self, write_binary) -> None:
+        binary = write_binary("tool", make_elf(0x3E))
+        assert "2.28 or newer" in self.note(binary, "manylinux_2_28_x86_64")
+
+    def test_a_musl_binary_says_so(self, write_binary) -> None:
+        binary = write_binary("tool", make_elf(0x3E, interp=MUSL_INTERP))
+        assert "musl" in self.note(binary, "musllinux_1_2_x86_64")
+
+    def test_a_universal_binary_names_both_slices(self, write_binary) -> None:
+        binary = write_binary("tool", make_fat_macho([0x01000007, 0x0100000C]))
+        note = self.note(binary, "macosx_11_0_universal2")
+        assert "x86_64" in note
+        assert "arm64" in note
+
+    def test_a_windows_binary_needs_no_gloss(self, write_binary) -> None:
+        """`win_amd64` says everything there is to say."""
+        assert self.note(write_binary("tool.exe", make_pe(0x8664)), "win_amd64") == ""
+
+    def test_an_overridden_tag_gets_no_gloss_from_the_binary(
+        self, write_binary
+    ) -> None:
+        """--platform-tag can contradict the file; then say nothing about it."""
+        binary = write_binary("tool", make_elf(0x3E, interp=None))
+        # Static, but forced onto a plain manylinux tag: the both-families
+        # explanation would describe a tag this wheel does not carry.
+        assert self.note(binary, "manylinux_2_17_x86_64") == ""
+
+    def test_a_script_forced_onto_a_platform_tag_is_left_alone(
+        self, shell_script
+    ) -> None:
+        assert self.note(shell_script, "manylinux_2_17_x86_64") == ""
+
+
+class TestReadmeProvenance:
+    """The rendered README carries the facts, and survives without them."""
+
+    def readme(self, path, tag, **overrides) -> str:
+        return render_readme(
+            spec(
+                platform_tag=tag,
+                binary_name=path.name,
+                provenance=describe_input(inspect_binary(path), path, tag),
+                **overrides,
+            )
+        )
+
+    def test_the_digest_and_tag_are_both_present(self, write_binary) -> None:
+        data = make_elf(0x3E, interp=None)
+        binary = write_binary("tool", data)
+        tag = "manylinux_2_17_x86_64.musllinux_1_2_x86_64"
+        text = self.readme(binary, tag)
+        assert hashlib.sha256(data).hexdigest() in text
+        assert tag in text
+
+    def test_the_launcher_is_explained_not_just_named(self, write_binary) -> None:
+        """`direct` and `shim` are wheelbarrow's jargon, not a user's."""
+        binary = write_binary("tool", make_elf(0x3E))
+        direct = self.readme(binary, "any", launcher=Launcher.DIRECT)
+        shim = self.readme(binary, "any", launcher=Launcher.SHIM)
+        assert "starts no interpreter" in direct
+        assert "execv" in shim
+        assert direct != shim
+
+    def test_it_renders_without_any_provenance(self) -> None:
+        """A library caller building a spec by hand still gets a valid README."""
+        text = render_readme(spec())
+        assert "sha256" not in text
+        assert "macosx_11_0_arm64" in text
+
+    def test_generated_markdown_is_wrapped(self, shell_script) -> None:
+        """A long interpreter path must not leave a 200-column line behind."""
+        text = self.readme(shell_script, "any")
+        assert max(len(line) for line in text.splitlines()) <= 88

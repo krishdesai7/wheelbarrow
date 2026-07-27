@@ -27,13 +27,15 @@ entry points that `execv` it:
         bin/<binary>        <- staged executable, mode 0o755
 """
 
+import hashlib
 import re
 import shutil
 import stat
+import textwrap
 from dataclasses import dataclass, field
 from enum import StrEnum, auto
 from pathlib import Path
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from packaging.utils import NormalizedName, canonicalize_name
 from packaging.version import InvalidVersion, Version
@@ -43,6 +45,7 @@ from .templates import (
     DATA_TABLE,
     INIT_DIRECT,
     INIT_SHIM,
+    LAUNCHER_NOTES,
     MAIN,
     PYPROJECT,
     README,
@@ -50,6 +53,9 @@ from .templates import (
     toml_array,
     toml_str,
 )
+
+if TYPE_CHECKING:
+    from .probe import BinaryInfo
 
 #: Directory, relative to the project root, holding binaries destined for
 #: `.data/scripts/`. Deliberately outside `src/` so it is not package data.
@@ -65,6 +71,29 @@ WINDOWS_EXEC_SUFFIXES: Final[frozenset[str]] = frozenset(
 )
 
 
+#: How a format identifies itself in prose. `describe()` on `BinaryInfo` is the
+#: terse form meant for a terminal; this is the one that ends up on PyPI.
+FORMAT_NAMES: Final[dict[str, str]] = {
+    "elf": "ELF executable",
+    "macho": "Mach-O executable",
+    "macho-universal": "Mach-O universal binary",
+    "pe": "PE executable",
+}
+
+LINKAGE_NAMES: Final[dict[str, str]] = {
+    "static": "statically linked",
+    "glibc": "dynamically linked against glibc",
+    "musl": "dynamically linked against musl",
+}
+
+#: The glibc floor a manylinux tag claims, wherever it sits in a tag set.
+_MANYLINUX_RE: Final[re.Pattern[str]] = re.compile(r"manylinux_(\d+)_(\d+)_")
+
+#: Generated Markdown is wrapped to this, so a long interpreter path or tag
+#: does not leave a single 200-column line in a file people will read.
+_WRAP: Final[int] = 79
+
+
 class Launcher(StrEnum):
     """How the packaged binary is exposed on `PATH`."""
 
@@ -73,6 +102,101 @@ class Launcher(StrEnum):
     DIRECT = auto()
     #: Console script entry point that `execv`s a binary inside the package.
     SHIM = auto()
+
+
+@dataclass(frozen=True)
+class Provenance:
+    """What the generated README says about the file the wheel wraps.
+
+    Prose rather than raw fields, because the README is the only consumer and
+    the cases that need explaining -- a script, a static binary, a universal
+    one -- are better decided here, where they can be tested, than inside a
+    template.
+    """
+
+    #: Digest of the file exactly as packaged, so a reader can check it against
+    #: whatever the tool's own publisher lists.
+    sha256: str
+    #: One line naming the format, the platform and the linkage.
+    kind: str
+    #: What the wheel tag means in words, or empty when it speaks for itself.
+    note: str = ""
+
+
+def describe_input(info: BinaryInfo, binary: Path, platform_tag: str) -> Provenance:
+    """Summarise a packaged file for its README.
+
+    `platform_tag` is passed in rather than derived so that every claim made
+    here is a claim the wheel actually carries. Under `--platform-tag` the tag
+    and the binary can disagree, and then the honest thing is to describe the
+    file and stay quiet about what the tag means.
+    """
+    return Provenance(
+        sha256=_sha256(binary),
+        kind=_describe_kind(info),
+        note=_describe_tag(info, platform_tag),
+    )
+
+
+def _sha256(path: Path) -> str:
+    with Path(path).open("rb") as handle:
+        return hashlib.file_digest(handle, "sha256").hexdigest()
+
+
+def _describe_kind(info: BinaryInfo) -> str:
+    if info.is_script:
+        return f"script run by `{info.interpreter}`"
+
+    parts: list[str] = [
+        FORMAT_NAMES.get(info.format, info.format),
+        f"{info.os}/{info.arch}",
+    ]
+    linkage: str | None = LINKAGE_NAMES.get(info.libc or "")
+    if linkage:
+        parts.append(linkage)
+    if info.macos_min:
+        parts.append(f"macOS {info.macos_min[0]}.{info.macos_min[1]}+")
+    if info.is_universal:
+        parts.append("slices: " + ", ".join(info.slices))
+    return ", ".join(parts)
+
+
+def _describe_tag(info: BinaryInfo, tag: str) -> str:
+    """Explain the tag, but only where it and the binary agree.
+
+    Each branch is guarded on what the tag actually says, so an overridden tag
+    never gets a gloss drawn from the binary it contradicts.
+    """
+    if info.is_script and tag == "any":
+        return (
+            f"The tag is `any` because no wheel tag can express "
+            f"“needs {info.interpreter}”. This wheel will therefore "
+            f"install anywhere, including on systems where that interpreter "
+            f"does not exist."
+        )
+    if info.libc == "static" and "." in tag:
+        return (
+            "Statically linked, so it needs no C library at all. The tag is a "
+            "compressed set naming both families deliberately: manylinux alone "
+            "would withhold it from Alpine, and musllinux alone from glibc "
+            "systems on architectures with no glibc build."
+        )
+    if info.libc == "glibc":
+        floor: re.Match[str] | None = _MANYLINUX_RE.search(tag)
+        if floor:
+            return (
+                f"Dynamically linked against glibc. It needs version "
+                f"{floor[1]}.{floor[2]} or newer, which is what the manylinux "
+                f"tag records."
+            )
+    if info.libc == "musl" and "musllinux" in tag:
+        return "Dynamically linked against musl, so it installs on Alpine and kin."
+    if info.is_universal and tag.endswith("universal2"):
+        return (
+            f"A universal binary carrying {' and '.join(info.slices)}; the "
+            f"`universal2` tag covers both."
+        )
+    return ""
 
 
 @dataclass
@@ -93,6 +217,8 @@ class PackageSpec:
     keywords: list[str] = field(default_factory=list)
     classifiers: list[str] = field(default_factory=list)
     urls: dict[str, str] = field(default_factory=dict)
+    #: Optional: callers that inspected the input can describe it in the README.
+    provenance: Provenance | None = None
 
     @property
     def installed_names(self) -> list[str]:
@@ -140,6 +266,7 @@ def make_spec(
     author_email: str | None = None,
     keywords: list[str] | None = None,
     homepage: str | None = None,
+    provenance: Provenance | None = None,
 ) -> PackageSpec:
     """Validate and normalise user-supplied metadata into a `PackageSpec`."""
     dist_name: str = _normalise_name(name)
@@ -176,6 +303,7 @@ def make_spec(
         authors=authors,
         keywords=keywords or [],
         urls=urls,
+        provenance=provenance,
     )
 
 
@@ -358,12 +486,28 @@ def render_main(spec: PackageSpec) -> str:
 
 
 def render_readme(spec: PackageSpec) -> str:
-    alias_list: str = ", ".join(f"`{a}`" for a in spec.aliases)
+    """Render the README that becomes the wheel's long description.
+
+    The provenance block degrades rather than breaks when nothing inspected the
+    input: a library caller who builds a `PackageSpec` by hand still gets a
+    correct README, just without the digest and the description of the file.
+    """
+    facts: list[str] = [f"- **file** — `{spec.binary_name}`"]
+    note: str = ""
+    if spec.provenance is not None:
+        facts += [
+            f"- **kind** — {spec.provenance.kind}",
+            f"- **sha256** — `{spec.provenance.sha256}`",
+        ]
+        note = spec.provenance.note
+    facts.append(f"- **wheel tag** — `{spec.platform_tag}`")
+
     return README.substitute(
         dist_name=spec.dist_name,
         binary_name=spec.binary_name,
         module=spec.module,
-        alias_list=alias_list,
-        platform_tag=spec.platform_tag,
-        launcher=spec.launcher.value,
+        alias_list=", ".join(f"`{a}`" for a in spec.aliases),
+        launcher_note=textwrap.fill(LAUNCHER_NOTES[spec.launcher.value], _WRAP),
+        provenance_facts="\n".join(facts),
+        tag_note=f"\n{textwrap.fill(note, _WRAP)}\n" if note else "",
     )

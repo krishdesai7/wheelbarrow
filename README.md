@@ -2,7 +2,7 @@
 
 Convert OS binaries into PyPI-installable Python wheels.
 
-A variety of tools ship only as prebuilt binaries, or as standalone shell scripts, and can therefore only be installed through a system package manager Wheelbarrow wraps such executables in a correctly tagged wheel so they can be installed with Python's tooling:
+A variety of tools ship only as prebuilt binaries, or as standalone shell scripts, and can therefore only be installed through a system package manager. Wheelbarrow wraps such executables in a correctly tagged wheel so they can be installed with Python's tooling:
 
 ```zsh
 uv tool install <tool-name>
@@ -79,7 +79,7 @@ built dist/<tool-name>-<version>-py3-none-<platform-tag>.whl (<size>)
 Installing that wheel puts a working `<alias>` on `PATH`:
 
 ```zsh
-$ uv tool install dist/<tool-name>_bin-<version>-py3-none-<platform-tag>.whl
+$ uv tool install dist/<tool-name>-<version>-py3-none-<platform-tag>.whl
 Installed 1 executable: <alias>
 $ <alias> --version
 <tool-name> <version>
@@ -196,7 +196,16 @@ naming every such file at once so that one pass through the directory is enough.
 
 ## How it works
 
-Wheelbarrow comprises four modules, each available individually if one wants to script them.
+Building a wheel is one pipeline, and every stage is a module you can import and use on its own. `fetch` and `discover` sit in front of it; the four numbered stages below are the build itself.
+
+```
+discover.collect      an executable, or every one under a directory
+probe.inspect_binary  read ELF/Mach-O/PE headers off disk
+tags.platform_tag     BinaryInfo -> PEP 425 platform tag
+scaffold              validate metadata, render the project, stage the binary
+builder.build_wheel   PEP 517 via build.ProjectBuilder -> py3-none-any wheel
+wheelfix.retag_wheel  rewrite the archive with the real platform tag
+```
 
 ### 1. Input inspection
 
@@ -209,8 +218,10 @@ format     elf
 os         linux
 arch       x86_64
 libc       static
-wheel tag  py3-none-manylinux_2_17_x86_64
+wheel tag  py3-none-manylinux_2_17_x86_64.musllinux_1_2_x86_64
 ```
+
+That tag is a compressed set rather than a typo — see [Static binaries claim both libc families](#static-binaries-claim-both-libc-families).
 
 ### 2. Dynamic project templating
 
@@ -232,6 +243,24 @@ src/                      # The source code for the tool
 
 With `--launcher shim` the binary lives inside the package at `<tool-name>/bin/<binary>` instead, and `pyproject.toml` gains a `[project.scripts]` entry point per alias.
 
+The generated `README.md` becomes the wheel's long description — the PyPI project page — so it is written for whoever installs the package rather than for whoever built it. It records what the wheel actually contains:
+
+```markdown
+## Provenance
+
+- **file** — `starship`
+- **kind** — ELF executable, linux/x86_64, statically linked
+- **sha256** — `3696a6cf…`
+- **wheel tag** — `manylinux_2_17_x86_64.musllinux_1_2_x86_64`
+
+Statically linked, so it needs no C library at all. The tag is a compressed set
+naming both families deliberately: manylinux alone would withhold it from
+Alpine, and musllinux alone from glibc systems on architectures with no glibc
+build.
+```
+
+The digest is of the file exactly as packaged, so anyone can check it against whatever the tool's own publisher lists. The closing paragraph explains what the wheel tag means in words, which matters most in the two cases where the tag alone misleads: a static binary, whose compressed tag set looks like a typo until you know why both families are named, and a shell script, whose `any` tag promises far more than the script can deliver. That paragraph is only written when the tag and the binary agree — under `--platform-tag` they can contradict each other, and then the README describes the file and stays quiet about the tag.
+
 ### 3. Asset staging
 
 The binary is copied into place and its mode is set explicitly to `0o755`. Binaries extracted from release archives frequently arrive as `0o644`, so the executable bit is set rather than inherited.
@@ -252,7 +281,7 @@ Entries are written with a fixed timestamp, so identical inputs produce byte-ide
 
 ## Resolving the platform tag
 
-Correctly resolving the platform tag ensures that a wheel is installed where it cannot run. E.g.,
+Correctly resolving the platform tag is what stops a wheel being installed where it cannot run:
 
 ```zsh
 $ uv add faketool_bin-1.0.0-py3-none-manylinux_2_17_x86_64.whl
@@ -356,7 +385,7 @@ built dist/ripgrep_bin-14.1.0-py3-none-macosx_11_0_arm64.whl (4.8 MiB)
 
 This is advice, not a gate. It never fails the build, because a 200 cannot tell your own project apart from someone else's, and rebuilding a package you already own is the usual case. A free name is not remarked on.
 
-The lookup adds roughly 100 ms and is the only time wheelbarrow touches the network while building. If the index cannot be reached the build carries on regardless — pass `--verbose` to see that it was skipped, or `--no-check-name` to not ask at all.
+The lookup adds roughly 100 ms and is the only time wheelbarrow touches the network while building. If the index cannot be reached the build carries on regardless — pass `--verbose` to see that it was skipped, or `--no-check-name` to not ask at all. Building a directory asks once for the whole batch, since every wheel in it carries the same project name.
 
 ## Publishing
 
@@ -379,13 +408,15 @@ export UV_PUBLISH_TOKEN=pypi-...
 
 Wheelbarrow checks for it before asking for confirmation, so a missing token is reported straight away rather than after you have committed to the upload. Note that a `.env` file is not loaded automatically; either export the variable or run `uv run --env-file .env wheelbarrow publish ...`.
 
-To publish one package for several platforms, build a wheel per binary and upload them together. Installers will select which wheel to install based on the platform tag.
+To publish one package for several platforms, build a wheel per binary and upload them together; installers pick the right one by its platform tag. Point `build` at the directory and it does the whole set at once:
 
 ```zsh
-wheelbarrow build ./<binary-macos-arm64>  -n <tool-name>-bin -V <version> -a <alias> -o dist
-wheelbarrow build ./<binary-linux-x86_64> -n <tool-name>-bin -V <version> -a <alias> -o dist
-wheelbarrow publish dist/<tool-name>_bin-<version>-py3-none-<platform-tag>.whl
+wheelbarrow fetch <release-url> ~/<tool-name> -p '<glob>'
+wheelbarrow build ~/<tool-name> -n <tool-name>-bin -V <version> -o dist
+wheelbarrow publish dist/*.whl
 ```
+
+Every wheel in that set shares a name and version, so `dist/*.whl` uploads them in one call. `build` refuses up front if two of them would collide on a tag, which is what makes the glob safe to use.
 
 ## The launcher
 
@@ -475,7 +506,7 @@ Running a command with no arguments at all prints its help, so `wheelbarrow buil
 ## Notes and limitations
 
 - Wheelbarrow only repackages binaries. It never compiles or modifies them.
-- Dynamically linked Linux binaries are tagged `manylinux_2_17` by default. That is a claim about glibc compatibility that Wheelbarrow cannot verify. If the binary needs a newer glibc version, pass `--glibc`. Statically linked binaries, the most common case for Rust and Go tools, are unaffected.
+- For a dynamically linked glibc binary the manylinux floor is measured from `.gnu.version_r`, and `manylinux_2_17` is only the lower bound it can never fall below. The measurement records the highest glibc symbol the binary imports, which is a good proxy for what it needs but not a guarantee; `--glibc` overrides it. Statically linked binaries, the most common case for Rust and Go tools, are unaffected.
 - One wheel carries one binary for one platform. Tools that need companion files (man pages, completions, shared libraries) are out of scope. Building a directory produces one such wheel per binary; it does not combine them.
 - Symlinks are skipped when walking a directory, so a link beside its target is not packaged a second time under the link's name.
 - Generated projects use the `uv_build` backend, which is pinned to a narrow range (`>=0.11.30,<0.12`). A project kept with `--keep-project` and rebuilt much later may need that pin refreshed.

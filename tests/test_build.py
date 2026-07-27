@@ -148,10 +148,21 @@ class TestWheelContents:
             assert archived == listed
 
     def test_binary_is_not_stored_twice(self, built) -> None:
-        """The staging layout must not let the binary in as package data too."""
+        """The staging layout must not let the binary in as package data too.
+
+        Counted by content rather than by size: direct mode stores one copy per
+        alias on purpose, so the question is whether those bytes appear anywhere
+        they were not asked for.
+        """
+        expected = archive_executables(built.spec)
         with zipfile.ZipFile(built.wheel) as zf:
-            big = [i for i in zf.infolist() if i.file_size > 1024]
-        assert len(big) == len(archive_executables(built.spec))
+            wanted = hashlib.sha256(zf.read(next(iter(expected)))).hexdigest()
+            digests = [
+                hashlib.sha256(zf.read(item.filename)).hexdigest()
+                for item in zf.infolist()
+                if not item.is_dir()
+            ]
+        assert digests.count(wanted) == len(expected)
 
     def test_no_stray_record_entry_from_the_backend(self, wheel) -> None:
         with zipfile.ZipFile(wheel) as zf:

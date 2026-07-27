@@ -19,7 +19,13 @@ from .builder import BuildResult, build_packages
 from .errors import WheelbarrowError
 from .publish import PublishPlan, plan_publish, resolve_token, run_publish
 from .pypi import NameStatus
-from .scaffold import Launcher, PackageSpec, default_alias, make_spec
+from .scaffold import (
+    Launcher,
+    PackageSpec,
+    default_alias,
+    describe_input,
+    make_spec,
+)
 from .tags import full_tag, platform_tag
 
 if TYPE_CHECKING:
@@ -372,6 +378,10 @@ def _print_info(info: BinaryInfo, tag: str) -> None:
         table.add_row("interpreter", info.interpreter)
     if info.libc:
         table.add_row("libc", info.libc)
+    if info.glibc_min:
+        # The measurement that silently decides the manylinux floor, and the
+        # one number worth checking by hand before publishing.
+        table.add_row("glibc min", f"{info.glibc_min[0]}.{info.glibc_min[1]}")
     if info.macos_min:
         table.add_row("min macOS", f"{info.macos_min[0]}.{info.macos_min[1]}")
     if info.is_universal:
@@ -631,6 +641,7 @@ def _plan_builds(
                     binary_name=candidate.path.name,
                     platform_tag=tag,
                     aliases=aliases,
+                    provenance=describe_input(candidate.info, candidate.path, tag),
                     **spec_fields,
                 ),
             )

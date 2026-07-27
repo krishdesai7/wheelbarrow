@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```zsh
 uv sync --dev --frozen     # set up the environment
-uv run pytest              # full suite (~130 tests, a few seconds)
+uv run pytest              # full suite (~410 tests, a few seconds)
 uv run pytest tests/test_build.py::TestLauncherLayouts::test_shim_keeps_the_binary_in_the_package
 uv run pytest -k universal # select by name
 uv run ruff check
@@ -19,7 +19,8 @@ Run the CLI during development with `uv run wheelbarrow ...`.
 ## Architecture
 
 Wheelbarrow wraps a prebuilt native executable in a correctly tagged Python wheel. One pipeline runs
-end to end in `builder.build_package`, and each stage is a separate module that can be used alone:
+end to end in `builder.build_package` -- `build_packages` is that same pipeline in a loop, for a
+directory -- and each stage is a separate module that can be used alone:
 
 ```
 discover.collect      -> Discovery       a file, or every executable under a directory
@@ -178,7 +179,15 @@ is deliberately narrow rather than "keep the suffix".
   escaping as a traceback is a bug.
 - Generated file bodies live entirely in `templates.py` as `string.Template` objects — keep them
   readable as the Python/TOML they become, and render TOML values through `toml_str`/`toml_array`
-  rather than interpolating raw strings.
+  rather than interpolating raw strings. The generated `README.md` is the wheel's long
+  description, so it is written for whoever installs the package: no wheelbarrow jargon
+  (`LAUNCHER_NOTES` exists because "direct" and "shim" mean nothing on a PyPI page), and nothing
+  the input may not be — a `#!` script is a "program", never "a prebuilt executable".
+- `scaffold.describe_input` builds the README's provenance block, and `_describe_tag` is the part
+  to be careful with: every branch is guarded on what the *tag* says, not only on what the binary
+  is. `--platform-tag` can put the two in contradiction, and a gloss drawn from the binary would
+  then describe a wheel that does not exist. `PackageSpec.provenance` stays optional so a library
+  caller assembling a spec by hand still renders a correct README, just a barer one.
 - `uv_build` is a direct runtime dependency of wheelbarrow so the default (non-`--isolated`) build
   path can run the backend in-process instead of provisioning a venv. It is pinned to `>=0.11.30,<0.12`
   in both `pyproject.toml` and the generated `PYPROJECT` template; those pins must move together.
@@ -193,9 +202,16 @@ is deliberately narrow rather than "keep the suffix".
 
 ### Tests
 
-`tests/conftest.py` assembles synthetic ELF, Mach-O, fat Mach-O and PE images byte by byte, so the
-suite is hermetic and every platform path is exercised from any host. Add new format coverage by
-extending those builders rather than committing binary fixtures.
+**No test may touch the network.** `tests/conftest.py` assembles synthetic ELF, Mach-O, fat Mach-O
+and PE images byte by byte, so the suite is hermetic and every platform path is exercised from any
+host. Add new format coverage by extending those builders rather than committing binary fixtures.
+`fake_http` (also in conftest) replaces `fetch._open`, the single function every GitHub request
+goes through, and `pypi` tests stub `urlopen`; credential tests always monkeypatch the token
+variables rather than reading whatever the developer has exported.
+
+`tests/test_cli.py` pins the rich console width in an autouse fixture. The consoles are module
+level and size themselves at import -- 80 columns when nothing is a terminal, narrow enough to wrap
+a path or an option name across two lines and quietly defeat an `in` assertion.
 
 `TestInstalledWheelRuns` in `tests/test_build.py` really installs a built wheel (pip, falling back to
 uv) into a `--target` directory and executes it, using a `/bin/sh` script plus an explicit
