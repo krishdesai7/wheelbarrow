@@ -1,5 +1,6 @@
 """CLI surface: how help is reached, and when an error is shown instead."""
 
+import json
 import re
 
 import pytest
@@ -12,7 +13,7 @@ runner = CliRunner()
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 #: Every command the app exposes, `help` included -- it documents itself.
-COMMANDS = ["inspect", "build", "publish", "help"]
+COMMANDS = ["fetch", "inspect", "build", "publish", "help"]
 
 
 def run(*args: str) -> Result:
@@ -32,14 +33,14 @@ def plain_output(result: Result) -> str:
 class TestBareSubcommandShowsHelp:
     """`wheelbarrow COMMAND` with no arguments behaves like the bare app."""
 
-    @pytest.mark.parametrize("command", ["inspect", "build", "publish"])
+    @pytest.mark.parametrize("command", ["fetch", "inspect", "build", "publish"])
     def test_no_arguments_prints_the_commands_help(self, command) -> None:
         result = run(command)
         rendered = plain_output(result)
         assert f"Usage: wheelbarrow {command}" in rendered
         assert "--help" in rendered
 
-    @pytest.mark.parametrize("command", ["inspect", "build", "publish"])
+    @pytest.mark.parametrize("command", ["fetch", "inspect", "build", "publish"])
     def test_no_arguments_matches_explicit_help(self, command) -> None:
         # Compared modulo trailing whitespace: click's no-args path omits the
         # blank line that its `--help` handler prints after the rendered help.
@@ -185,6 +186,147 @@ class TestScriptSupport:
         )
         assert result.exit_code == 0
         assert "--platform-tag" not in everything_written(result)
+
+
+class TestFetchCommand:
+    """`fetch`, with GitHub replaced by the `fake_http` routing table."""
+
+    API = "https://api.github.com/repos/acme/tool/releases/tags/v1.0.0"
+    ASSET = "https://example.test/tool-linux.tar.gz"
+
+    def stub_release(self, routes, tarball, *, digest: bool) -> None:
+        data, checksum = tarball
+        routes[self.API] = json.dumps(
+            {
+                "tag_name": "v1.0.0",
+                "assets": [
+                    {
+                        "name": "tool-linux.tar.gz",
+                        "browser_download_url": self.ASSET,
+                        "size": len(data),
+                        "digest": f"sha256:{checksum}" if digest else None,
+                    },
+                    {
+                        "name": "tool-windows.zip",
+                        "browser_download_url": "https://example.test/w.zip",
+                        "size": 10,
+                        "digest": f"sha256:{'a' * 64}" if digest else None,
+                    },
+                ],
+            }
+        ).encode()
+        routes[self.ASSET] = data
+
+    def test_a_release_is_downloaded_verified_and_unpacked(
+        self, fake_http, tarball, tmp_path
+    ) -> None:
+        self.stub_release(fake_http, tarball, digest=True)
+        result = run(
+            "fetch",
+            "https://github.com/acme/tool/releases/tag/v1.0.0",
+            str(tmp_path),
+            "-p",
+            "*.tar.gz",
+        )
+        assert result.exit_code == 0
+        assert (tmp_path / "tool-linux.tar.gz").is_file()
+        extracted = tmp_path / "tool-linux" / "tool"
+        assert extracted.is_file()
+        assert extracted.stat().st_mode & 0o111
+
+    def test_the_summary_points_at_the_next_command(
+        self, fake_http, tarball, tmp_path
+    ) -> None:
+        self.stub_release(fake_http, tarball, digest=True)
+        result = run(
+            "fetch", "acme/tool", str(tmp_path), "-t", "v1.0.0", "-p", "*.tar.gz"
+        )
+        written = plain_output(result)
+        assert "wheelbarrow build" in written
+
+    def test_list_shows_the_assets_without_downloading(
+        self, fake_http, tarball, tmp_path
+    ) -> None:
+        self.stub_release(fake_http, tarball, digest=True)
+        result = run("fetch", "acme/tool", str(tmp_path), "-t", "v1.0.0", "--list")
+        assert result.exit_code == 0
+        rendered = plain_output(result)
+        assert "tool-linux.tar.gz" in rendered
+        assert "tool-windows.zip" in rendered
+        assert list(tmp_path.iterdir()) == []
+
+    def test_no_extract_leaves_the_archive_packed(
+        self, fake_http, tarball, tmp_path
+    ) -> None:
+        self.stub_release(fake_http, tarball, digest=True)
+        result = run(
+            "fetch",
+            "acme/tool",
+            str(tmp_path),
+            "-t",
+            "v1.0.0",
+            "-p",
+            "*.tar.gz",
+            "--no-extract",
+        )
+        assert result.exit_code == 0
+        assert (tmp_path / "tool-linux.tar.gz").is_file()
+        assert not (tmp_path / "tool-linux").exists()
+
+    def test_an_unverifiable_release_fails_and_names_the_override(
+        self, fake_http, tarball, tmp_path
+    ) -> None:
+        """Old releases carry no digest; that must stop rather than warn."""
+        self.stub_release(fake_http, tarball, digest=False)
+        result = run(
+            "fetch", "acme/tool", str(tmp_path), "-t", "v1.0.0", "-p", "*.tar.gz"
+        )
+        assert result.exit_code == 1
+        assert "--allow-unverified" in everything_written(result)
+        assert list(tmp_path.iterdir()) == []
+
+    def test_the_override_downloads_it_anyway(
+        self, fake_http, tarball, tmp_path
+    ) -> None:
+        self.stub_release(fake_http, tarball, digest=False)
+        result = run(
+            "fetch",
+            "acme/tool",
+            str(tmp_path),
+            "-t",
+            "v1.0.0",
+            "-p",
+            "*.tar.gz",
+            "--allow-unverified",
+        )
+        assert result.exit_code == 0
+        assert (tmp_path / "tool-linux.tar.gz").is_file()
+
+    def test_a_pattern_matching_nothing_is_an_error(
+        self, fake_http, tarball, tmp_path
+    ) -> None:
+        self.stub_release(fake_http, tarball, digest=True)
+        result = run(
+            "fetch", "acme/tool", str(tmp_path), "-t", "v1.0.0", "-p", "*-freebsd*"
+        )
+        assert result.exit_code == 1
+        assert "no asset" in everything_written(result)
+
+    def test_a_tag_contradicting_the_url_is_refused(self, tmp_path) -> None:
+        """Guessing which one was meant would silently fetch the wrong release."""
+        result = run(
+            "fetch",
+            "https://github.com/acme/tool/releases/tag/v1.0.0",
+            str(tmp_path),
+            "-t",
+            "v2.0.0",
+        )
+        assert result.exit_code == 1
+        assert "v2.0.0" in everything_written(result)
+
+    def test_there_is_no_token_option(self) -> None:
+        """Like publishing, the credential is environment-only."""
+        assert "--token" not in plain_output(run("fetch", "--help"))
 
 
 class TestPublishTakesNoToken:

@@ -7,7 +7,7 @@ mutable:
     uv sync -U
     uv run pyrefly infer
     uv format
-    uv run ruff check --fix
+    uv run ruff check --fix --unsafe-fixes
     uv run pytest -q
 
 # Run immutable repository checks (read-only)

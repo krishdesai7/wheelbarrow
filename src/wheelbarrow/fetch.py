@@ -663,10 +663,12 @@ def extract(archive: Path, dest: Path) -> list[Path]:
 def _extract_tar(archive: Path, dest: Path) -> list[Path]:
     """Extract a tarball under the `data` filter.
 
-    The filter refuses absolute paths, `..` traversal, links pointing outside
-    the destination and device nodes, and drops setuid bits -- all of which
-    matter for an archive downloaded from the internet. It keeps the executable
-    bit, which is the one permission that has to survive.
+    The filter refuses `..` traversal, links pointing outside the destination
+    and device nodes, and drops setuid bits -- all of which matter for an
+    archive downloaded from the internet. It keeps the executable bit, which is
+    the one permission that has to survive. An absolute member name is not
+    refused but defanged: the leading separator is stripped, as GNU tar does,
+    so it lands under `dest` like everything else.
     """
     dest.mkdir(parents=True, exist_ok=True)
     try:
@@ -681,7 +683,10 @@ def _extract_tar(archive: Path, dest: Path) -> list[Path]:
     except tarfile.TarError as exc:
         raise FetchError(f"could not unpack {archive.name}: {exc}") from exc
 
-    return [dest / m.name for m in members if m.isfile()]
+    # The same strip the filter applied. Joining an absolute member name would
+    # otherwise discard `dest` entirely and report a path nothing was written
+    # to, since `Path("/a") / "/b"` is `/b`.
+    return [dest / m.name.lstrip("/") for m in members if m.isfile()]
 
 
 def _extract_zip(archive: Path, dest: Path) -> list[Path]:

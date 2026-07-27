@@ -42,6 +42,12 @@ raising, so builds keep working offline, and a `TAKEN` name is a warning, never 
 cannot distinguish your own project from someone else's). Tests stub `urlopen`; never let the
 suite make a real request.
 
+`fetch.py` is network-first by definition, but it sits *before* the build path, not inside it —
+`build` still never reaches out. Its verification policy is the opposite of `check_name`'s: an
+asset that cannot be verified is fatal, because unverified bytes that become a published wheel
+is exactly the case worth interrupting for. `--allow-unverified` is the escape hatch, and it has
+to stay explicit.
+
 A platform tag states where an installer may *place* a wheel, not where the code can run — the two
 come apart for a statically linked ELF, which needs no libc at all. `_linux_tag` therefore emits a
 PEP 425 compressed tag set for `libc == "static"` (`manylinux_..._<arch>.musllinux_1_2_<arch>`):
@@ -83,6 +89,36 @@ platform tag, `true` for `any`, and `WHEEL.json` must keep agreeing with `WHEEL`
 Every entry is written at `ZIP_EPOCH`, so identical inputs produce byte-identical wheels — tests
 assert this, so do not introduce real timestamps or non-deterministic ordering.
 
+### Fetching is one HTTP choke point and two digest sources
+
+Every request `fetch.py` makes goes through `fetch._open`, which is what makes the suite
+hermetic: `conftest.fake_http` replaces that one function with a routing table, and nothing else
+needs stubbing. Adding a second way out to the network would break that guarantee silently, so
+route new calls through `_open` too.
+
+`_StripAuthOnRedirect` drops `Authorization` when a redirect crosses to another host. This is not
+optional politeness — urllib copies every header onto the redirected request, release downloads
+redirect from the API to object storage, and that host rejects a request carrying a second set of
+credentials. So it is simultaneously what stops a GitHub token leaking to a third party and the
+reason authenticated downloads work at all.
+
+Digests come from `Asset.digest` (the API's own, computed by GitHub on upload) or, when that is
+null, from a checksum file in the release. Both are needed: GitHub only began recording digests
+in 2025 and never backfilled, so any older release falls through to `_sidecar_digest` then
+`_manifest_digest`. `parse_checksums` handles both conventions in the wild, and `allow_bare` is
+what separates them — a lone digest is only meaningful in a file whose *name* says what it
+covers, which is why only the sidecar path passes it.
+
+`is_checksum_asset` keeps checksum files out of the payload set even when a pattern matches them,
+so `'*.tar.gz*'` behaves the way anyone would expect. `select_assets` raising on a pattern that
+matches nothing is deliberate: a quiet empty result is how an upstream rename turns into a
+missing wheel three steps later.
+
+`_extract_tar` reconstructs member paths with `m.name.lstrip("/")` rather than `m.name`. The
+`data` filter defangs an absolute member by stripping the leading separator instead of refusing
+it, and `Path(dest) / "/abs"` is `/abs` — so joining the raw name would report a path nothing was
+written to.
+
 ### The launcher choice reshapes everything downstream
 
 `Launcher.DIRECT` (default) vs `Launcher.SHIM` is not a flag checked in one place; it changes the
@@ -122,7 +158,8 @@ is deliberately narrow rather than "keep the suffix".
 - Publishing shells out to `uv publish`. The token is read from `UV_PUBLISH_TOKEN` by
   `publish.resolve_token()` and never travels in `argv`: there is deliberately no `--token`
   option, and `run_publish` lets uv inherit the environment rather than forwarding the value.
-  Keep credentials out of `PublishPlan.argv` and `display()`.
+  Keep credentials out of `PublishPlan.argv` and `display()`. `fetch.resolve_token()` follows
+  the same rule for `GH_TOKEN`/`GITHUB_TOKEN`: environment only, no option, never printed.
 - User-facing spelling is `licence`, but `scaffold.render_pyproject` must emit `license` —
   PEP 621 fixes that key, and a backend silently ignores an unrecognised one, dropping the
   field from the wheel's METADATA with no error.

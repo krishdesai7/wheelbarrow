@@ -36,6 +36,23 @@ $ pipx install wheelbarrow
 
 ## Quick start
 
+Most tools you want to package are published as a GitHub release, so `fetch` gets them
+and checks them in one step:
+
+```zsh
+$ wheelbarrow fetch https://github.com/starship/starship/releases/tag/v1.26.0 ~/starship \
+    -p '*-apple-darwin.tar.gz*' -p '*-unknown-linux-musl.tar.gz*'
+starship/starship v1.26.0 -- 6 of 30 assets selected
+  ok starship-aarch64-apple-darwin.tar.gz (3.9 MiB, the GitHub API)
+  ok starship-aarch64-unknown-linux-musl.tar.gz (4.6 MiB, the GitHub API)
+  ...
+fetched 6 asset(s) into ~/starship, 6 executable(s) extracted
+```
+
+Every asset is verified before it is unpacked, and each archive lands in a directory
+named after it, so the executables are ready to hand to `build`. See
+[Fetching release assets](#fetching-release-assets) for the details.
+
 Once installed you can run Wheelbarrow from the command line:
 
 ```zsh
@@ -54,6 +71,73 @@ Installed 1 executable: <alias>
 $ <alias> --version
 <tool-name> <version>
 ```
+
+## Fetching release assets
+
+`wheelbarrow fetch` replaces the download-verify-extract routine you would otherwise do
+by hand. It takes a release URL — or `owner/repo` with `--tag`, or neither for the latest
+release — and a directory to work in.
+
+```zsh
+wheelbarrow fetch <release-url> <dir> -p '<glob>'
+```
+
+It talks to the GitHub API directly rather than shelling out to `gh`, so `uvx wheelbarrow`
+works on a machine with nothing else installed. Public releases need no credentials. A
+token is read from `GH_TOKEN` or `GITHUB_TOKEN` when one is set, for private repositories
+and for the larger rate limit; as with the publish token there is deliberately no
+`--token` option, so it cannot land in a shell history.
+
+### Selecting assets
+
+`--pattern` is a glob over asset names and may be repeated. Anything matching nothing is
+an error rather than a quiet omission — a pattern that stops matching after an upstream
+rename would otherwise surface much later as a missing wheel. `--list` shows the release's
+assets and exits, which is the fastest way to find the right glob.
+
+Checksum files are never treated as payload, even when a pattern matches them. That is
+what lets `'*.tar.gz*'` — the natural way to ask for the tarballs — do the obvious thing
+rather than trying to unpack a `.sha256` alongside them.
+
+### Verification
+
+Nothing is unpacked before it is verified, and a file that fails is deleted rather than
+left on disk where a later `build` might sweep it up. The digest comes from one of two
+places, in order:
+
+1. **The GitHub API.** Every release asset carries a `digest` field that GitHub computes
+   itself on upload, so unlike a checksum file it is not simply another artefact the
+   publisher supplied.
+2. **A checksum file in the same release.** Assets uploaded before GitHub began recording
+   digests in 2025 have none, and then a per-asset sidecar (`<asset>.sha256`) is tried
+   first, followed by a whole-release manifest (`SHA256SUMS`, `checksums.txt`). Both
+   conventions found in the wild are parsed: a bare digest, and `<digest>  <name>` rows.
+
+Neither is a signature. Both attest that these are the bytes that were uploaded, not who
+uploaded them.
+
+A release offering no digest and no checksum file fails, naming the assets it could not
+verify. `--allow-unverified` downloads them anyway, and the summary marks them `??`
+instead of `ok`. Verification is resolved for every asset up front, so an unverifiable one
+stops the run before anything is written.
+
+An asset whose digest already matches a file in the destination is not downloaded again,
+so re-running over a populated directory costs nothing.
+
+### Extraction
+
+Each archive is unpacked into a directory named after it, so `starship-x86_64-apple-darwin.tar.gz`
+becomes `starship-x86_64-apple-darwin/`. Tarballs are extracted under Python's `data`
+filter, which refuses `..` traversal, links pointing outside the destination and device
+nodes, and drops setuid bits — while keeping the executable bit, the one permission that
+has to survive. Zip archives get that bit restored explicitly, since `zipfile` discards
+the stored Unix mode and would otherwise leave a binary unrunnable.
+
+An asset that is not an archive — a bare executable, or an installer like `.msi` — is
+downloaded and verified but not unpacked, which is not an error. `--no-extract` skips
+unpacking entirely.
+
+Fetching is not on the build path: `build` itself never reaches the network.
 
 ## How it works
 
@@ -291,6 +375,14 @@ In `direct` mode `binary_path()` locates the installed file rather than computin
 ## Command reference
 
 ```zsh
+wheelbarrow fetch SOURCE [DIR]         token comes from $GH_TOKEN or $GITHUB_TOKEN
+    -t, --tag TAG             release tag, if SOURCE has none
+    -p, --pattern GLOB        asset names to download (repeatable)
+        --list                show the release's assets and exit
+        --no-extract          download without unpacking
+        --allow-unverified    download assets that publish no checksum
+        --timeout SECONDS     per-request timeout (default: 30)
+
 wheelbarrow inspect BINARY [--glibc VERSION]
 
 wheelbarrow build BINARY --name NAME --version VERSION

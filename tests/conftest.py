@@ -5,11 +5,17 @@ Linux and Windows code paths from a macOS CI runner without shipping binary
 fixtures in the repository.
 """
 
+import email.message
+import hashlib
+import io
 import struct
-from typing import TYPE_CHECKING, Final, Literal
+import tarfile
+import urllib.error
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 import pytest
 
+from wheelbarrow import fetch
 from wheelbarrow.wheelfix import Mode
 
 if TYPE_CHECKING:
@@ -275,3 +281,41 @@ SHELL_SCRIPT: Final[bytes] = b'#!/bin/sh\nexec echo "tool:" "$@"\n'
 @pytest.fixture
 def shell_script(write_binary: Callable[[str, bytes, Mode], Path]) -> Path:
     return write_binary("tool.sh", SHELL_SCRIPT, Mode.EXEC)
+
+
+@pytest.fixture
+def fake_http(monkeypatch) -> dict[str, bytes | Exception]:
+    """Route `fetch`'s only HTTP entry point to an in-memory table.
+
+    Every request the module makes funnels through `fetch._open`, so replacing
+    that one function is what guarantees the suite never reaches GitHub. An
+    unregistered URL answers 404, exactly as a missing release would; mapping a
+    URL to an exception simulates a transport failure.
+    """
+    routes: dict[str, bytes | Exception] = {}
+
+    def _open(url: str, **_kwargs: Any) -> Any:
+        payload: bytes | Exception | None = routes.get(url)
+        if payload is None:
+            raise urllib.error.HTTPError(
+                url, 404, "Not Found", email.message.Message(), None
+            )
+        if isinstance(payload, Exception):
+            raise payload
+        return io.BytesIO(payload)
+
+    monkeypatch.setattr(fetch, "_open", _open)
+    return routes
+
+
+@pytest.fixture
+def tarball() -> tuple[bytes, str]:
+    """A gzipped tar holding one executable script, with its sha256."""
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
+        info = tarfile.TarInfo("tool")
+        info.size = len(SHELL_SCRIPT)
+        info.mode = 0o755
+        tar.addfile(info, io.BytesIO(SHELL_SCRIPT))
+    data: bytes = buffer.getvalue()
+    return data, hashlib.sha256(data).hexdigest()
