@@ -4,10 +4,17 @@
 `build_package` is the end-to-end pipeline that most callers want:
 
     inspect -> scaffold -> stage -> build -> retag
+
+`build_packages` runs that once per binary for a whole directory, sharing one
+name and version across the set. Its job beyond the loop is to refuse a batch
+that cannot succeed *before* any of it runs, since a failure half way through
+leaves finished wheels in the output directory that nothing will clean up.
 """
 
+import hashlib
 import shutil
 import tempfile
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -19,6 +26,8 @@ from pyproject_hooks import default_subprocess_runner, quiet_subprocess_runner
 if TYPE_CHECKING:
     # pyproject_hooks exports this Protocol for typing only; it does not exist
     # at runtime, so importing it unguarded raises ImportError.
+    from collections.abc import Callable, Sequence
+
     from pyproject_hooks import SubprocessRunner
 
 from .errors import BuildError
@@ -123,6 +132,90 @@ def build_package(
         placed: Path = _place_wheel(result.path, output_dir, overwrite=overwrite)
 
     return BuildResult(wheel=placed, tag=tag, spec=spec, project_dir=kept)
+
+
+def build_packages(
+    plans: Sequence[tuple[Path, PackageSpec]],
+    output_dir: Path,
+    *,
+    isolated: bool = False,
+    verbose: bool = False,
+    keep_project: Path | None = None,
+    overwrite: bool = False,
+    on_built: Callable[[BuildResult], None] | None = None,
+) -> list[BuildResult]:
+    """Build one wheel per `(binary, spec)` pair into a shared output directory.
+
+    Collisions are refused up front rather than discovered on the wheel that
+    hits one. `_place_wheel` would catch the same thing, but only after earlier
+    wheels had already been written -- and the whole point of a batch is that
+    the user is not watching each one.
+    """
+    refuse_tag_collisions(plans)
+
+    results: list[BuildResult] = []
+    for binary, spec in plans:
+        result: BuildResult = build_package(
+            binary,
+            spec,
+            output_dir,
+            isolated=isolated,
+            verbose=verbose,
+            keep_project=_keep_dir(keep_project, spec, batched=len(plans) > 1),
+            overwrite=overwrite,
+        )
+        results.append(result)
+        if on_built:
+            on_built(result)
+    return results
+
+
+def _keep_dir(
+    keep_project: Path | None, spec: PackageSpec, *, batched: bool
+) -> Path | None:
+    """Give each build its own project directory, or they overwrite each other."""
+    if keep_project is None:
+        return None
+    return Path(keep_project) / spec.platform_tag if batched else Path(keep_project)
+
+
+def refuse_tag_collisions(plans: Sequence[tuple[Path, PackageSpec]]) -> None:
+    """Reject a batch in which two different binaries claim one wheel name.
+
+    Name and version are shared across a batch, so the platform tag is the only
+    thing separating one wheel from the next: a glibc build and a static build
+    of the same tool both resolve to `manylinux_<baseline>_x86_64`, and the
+    second would silently replace the first. Identical inputs are exempt, since
+    builds are reproducible and a duplicate is a rebuild rather than a loss.
+    """
+    by_tag: dict[str, list[Path]] = defaultdict(list)
+    for binary, spec in plans:
+        by_tag[spec.platform_tag].append(binary)
+
+    clashes: list[tuple[str, list[Path]]] = [
+        (tag, binaries)
+        for tag, binaries in by_tag.items()
+        if len(binaries) > 1 and len({_digest(b) for b in binaries}) > 1
+    ]
+    if not clashes:
+        return
+
+    detail: str = "\n".join(
+        f"    {tag}\n" + "\n".join(f"      {b}" for b in binaries)
+        for tag, binaries in sorted(clashes)
+    )
+    raise BuildError(
+        f"these binaries resolve to the same platform tag, so they would "
+        f"overwrite one another in the output directory:\n{detail}\n"
+        f"Build them separately, or pass --platform-tag to distinguish them. "
+        f"A dynamically linked glibc build and a static build of the same "
+        f"architecture are the usual cause."
+    )
+
+
+def _digest(path: Path) -> str:
+    with Path(path).open("rb") as handle:
+        return hashlib.file_digest(handle, "sha256").hexdigest()
 
 
 def _place_wheel(built: Path, output_dir: Path, *, overwrite: bool) -> Path:

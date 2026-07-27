@@ -1,7 +1,7 @@
 """Command line interface for wheelbarrow."""
 
 from pathlib import Path
-from typing import Annotated, Protocol
+from typing import TYPE_CHECKING, Annotated, Any, Protocol
 
 import typer
 from rich.console import Console
@@ -14,14 +14,16 @@ from rich.progress import (
 )
 from rich.table import Table
 
-from . import __version__, fetch, pypi
-from .builder import BuildResult, build_package
+from . import __version__, discover, fetch, pypi
+from .builder import BuildResult, build_packages
 from .errors import WheelbarrowError
-from .probe import BinaryInfo, inspect_binary
 from .publish import PublishPlan, plan_publish, resolve_token, run_publish
 from .pypi import NameStatus
-from .scaffold import Launcher, PackageSpec, make_spec
+from .scaffold import Launcher, PackageSpec, default_alias, make_spec
 from .tags import full_tag, platform_tag
+
+if TYPE_CHECKING:
+    from .probe import BinaryInfo
 
 app = typer.Typer(
     rich_markup_mode="markdown",
@@ -281,7 +283,12 @@ def _report_fetched(results: list[fetch.FetchedAsset], dest: Path) -> None:
 
 @app.command("inspect", no_args_is_help=True)
 def inspect_command(
-    binary: Annotated[Path, typer.Argument(help="Path to the executable to inspect.")],
+    path: Annotated[
+        Path,
+        typer.Argument(
+            help="An executable, or a directory of them.",
+        ),
+    ],
     glibc: Annotated[
         str | None,
         typer.Option(
@@ -293,14 +300,65 @@ def inspect_command(
 
     Reads the executable's own headers, so it works on binaries built for a
     platform other than the one you are running on.
+
+    Given a directory it reports every executable beneath it, one row each, and
+    passes over anything that is not one -- so it can be pointed straight at
+    what `wheelbarrow fetch` leaves behind.
     """
     try:
-        info: BinaryInfo = inspect_binary(binary)
-        tag: str = platform_tag(info, glibc_version=glibc)
+        found: discover.Discovery = discover.collect(path)
     except WheelbarrowError as exc:
         raise _fail(str(exc)) from exc
 
-    _print_info(info, tag)
+    if found.is_single:
+        candidate: discover.Candidate = found.candidates[0]
+        try:
+            tag: str = platform_tag(candidate.info, glibc_version=glibc)
+        except WheelbarrowError as exc:
+            raise _fail(str(exc)) from exc
+        _print_info(candidate.info, tag)
+        return
+
+    _print_inventory(found, path, glibc=glibc)
+
+
+def _print_inventory(
+    found: discover.Discovery, root: Path, *, glibc: str | None
+) -> None:
+    """Tabulate a directory's executables, one row per binary.
+
+    An untaggable binary is shown with its reason rather than aborting the
+    listing: reporting is what this command is for, and refusing it is `build`'s
+    job.
+    """
+    table = Table(box=None, pad_edge=False)
+    table.add_column("path")
+    table.add_column("format", style="dim")
+    table.add_column("os/arch", style="dim")
+    table.add_column("wheel tag", style="bold green")
+
+    untaggable = 0
+    for candidate in found.candidates:
+        try:
+            tag: str = full_tag(platform_tag(candidate.info, glibc_version=glibc))
+        except WheelbarrowError as exc:
+            untaggable += 1
+            tag = f"[yellow]no tag[/] [dim]({exc})[/]"
+        info: BinaryInfo = candidate.info
+        table.add_row(
+            str(candidate.path.relative_to(root)),
+            info.format,
+            f"{info.os}/{info.arch}",
+            tag,
+        )
+
+    console.print(table)
+    summary: str = f"{len(found.candidates)} executable(s)"
+    if found.skipped:
+        summary += f", {len(found.skipped)} other file(s) ignored"
+    if untaggable:
+        summary += f", {untaggable} with no wheel tag"
+    console.print(f"[dim]{summary}[/]")
 
 
 def _print_info(info: BinaryInfo, tag: str) -> None:
@@ -327,7 +385,10 @@ def _print_info(info: BinaryInfo, tag: str) -> None:
 
 @app.command("build", no_args_is_help=True)
 def build_command(
-    binary: Annotated[Path, typer.Argument(help="Path to the executable to package.")],
+    path: Annotated[
+        Path,
+        typer.Argument(help="An executable to package, or a directory of them."),
+    ],
     name: Annotated[str, typer.Option("--name", "-n", help="PyPI project name.")],
     version: Annotated[
         str, typer.Option("--version", "-V", help="Package version (PEP 440).")
@@ -424,47 +485,51 @@ def build_command(
         bool, typer.Option("--verbose", "-v", help="Show build backend output.")
     ] = False,
 ) -> None:
-    """Build a wheel that bundles **BINARY** and exposes it as a console script.
+    """Build a wheel that bundles **PATH** and exposes it as a console script.
 
     The binary's headers decide the wheel's platform tag, so a wheel built from
     a Linux binary will only install on Linux.
+
+    Given a directory, one wheel is built per executable beneath it, all sharing
+    the same **--name** and **--version** and differing only in platform tag --
+    which is the whole release packaged in a single command.
 
     Example:
 
         wheelbarrow build <path-to-binary> -n <binary-name> -V <version> -a <alias>
     """
+    aliases: list[str] | None = list(alias) if alias else None
     try:
-        info: BinaryInfo | None
-        tag: str
-        info, tag = _resolve_tag(
-            binary,
-            platform_tag_override,
+        found: discover.Discovery = discover.collect(path)
+        plans: list[tuple[Path, PackageSpec]] = _plan_builds(
+            found,
+            aliases=aliases,
+            override=platform_tag_override,
             glibc=glibc,
             macos_min=macos_min,
             universal2=universal2,
-        )
-        spec: PackageSpec = make_spec(
-            name=name,
-            version=version,
-            binary_name=binary.name,
-            platform_tag=tag,
-            aliases=list(alias) if alias else None,
-            launcher=launcher,
-            description=description,
-            requires_python=requires_python,
-            licence=licence_,
-            author=author,
-            author_email=author_email,
-            keywords=list(keyword) if keyword else None,
-            homepage=homepage,
+            spec_fields={
+                "name": name,
+                "version": version,
+                "launcher": launcher,
+                "description": description,
+                "requires_python": requires_python,
+                "licence": licence_,
+                "author": author,
+                "author_email": author_email,
+                "keywords": list(keyword) if keyword else None,
+                "homepage": homepage,
+            },
         )
 
-        if info is not None:
-            _note_tagging_caveats(info, tag)
+        if found.is_single and platform_tag_override is None:
+            _note_tagging_caveats(found.candidates[0].info, plans[0][1].platform_tag)
 
         if check_name:
-            _warn_if_name_is_taken(spec.dist_name, verbose=verbose)
+            # Once for the batch: every wheel carries the same project name.
+            _warn_if_name_is_taken(plans[0][1].dist_name, verbose=verbose)
 
+        spec: PackageSpec = plans[0][1]
         if spec.launcher is Launcher.DIRECT and len(spec.aliases) > 1:
             # Each alias *is* the installed file, so each needs its own copy.
             console.print(
@@ -473,18 +538,33 @@ def build_command(
                 f"Use --launcher shim to share one copy."
             )
 
-        result: BuildResult = build_package(
-            binary,
-            spec,
+        if len(plans) > 1:
+            console.print(
+                f"[bold]building {len(plans)} wheels[/] "
+                f"[dim]from {len(found.candidates)} executables in {path}[/]"
+            )
+
+        results: list[BuildResult] = build_packages(
+            plans,
             output,
             isolated=isolated,
             verbose=verbose,
             keep_project=keep_project,
             overwrite=overwrite,
+            on_built=_report_built if len(plans) > 1 else None,
         )
     except WheelbarrowError as exc:
         raise _fail(str(exc)) from exc
 
+    if len(results) > 1:
+        console.print(
+            f"[bold green]built[/] {len(results)} wheels into {output} "
+            f"[dim](launcher {spec.launcher.value}, "
+            f"scripts {', '.join(spec.aliases)})[/]"
+        )
+        return
+
+    result: BuildResult = results[0]
     console.print(
         f"[bold green]built[/] {result.wheel} "
         f"[dim]({_human_size(result.wheel.stat().st_size)})[/]"
@@ -494,6 +574,102 @@ def build_command(
     console.print(f"[dim]  scripts  [/] {', '.join(spec.aliases)}")
     if result.project_dir:
         console.print(f"[dim]  project  [/] {result.project_dir}")
+
+
+def _report_built(result: BuildResult) -> None:
+    """Print each wheel as it lands, so a long batch is not silent."""
+    console.print(
+        f"  [green]ok[/] {result.wheel.name} "
+        f"[dim]({_human_size(result.wheel.stat().st_size)})[/]"
+    )
+
+
+def _plan_builds(
+    found: discover.Discovery,
+    *,
+    aliases: list[str] | None,
+    override: str | None,
+    glibc: str | None,
+    macos_min: str | None,
+    universal2: bool,
+    spec_fields: dict[str, Any],
+) -> list[tuple[Path, PackageSpec]]:
+    """Resolve a tag and a spec for every discovered binary.
+
+    Everything that can be checked without building is checked here, and every
+    failure across the batch is reported at once: a user who has to re-run after
+    each individual complaint will give up long before the seventh.
+    """
+    candidates: tuple[discover.Candidate, ...] = found.candidates
+    if override and len(candidates) > 1:
+        raise WheelbarrowError(
+            f"--platform-tag names one tag, but {len(candidates)} executables "
+            f"were found in the directory; they would all claim it and "
+            f"overwrite one another. Build them one at a time to override a tag."
+        )
+
+    _refuse_mixed_names(candidates, aliases=aliases)
+
+    plans: list[tuple[Path, PackageSpec]] = []
+    failures: list[str] = []
+    for candidate in candidates:
+        try:
+            tag: str = override or platform_tag(
+                candidate.info,
+                glibc_version=glibc,
+                macos_min=_parse_macos_min(macos_min),
+                universal2=universal2,
+            )
+        except WheelbarrowError as exc:
+            if found.is_single:
+                raise  # one input, one question: answer it exactly as before
+            failures.append(f"    {candidate.path}: {exc}")
+            continue
+
+        plans.append(
+            (
+                candidate.path,
+                make_spec(
+                    binary_name=candidate.path.name,
+                    platform_tag=tag,
+                    aliases=aliases,
+                    **spec_fields,
+                ),
+            )
+        )
+
+    if failures:
+        listed: str = "\n".join(failures)
+        raise WheelbarrowError(
+            f"no wheel tag could be determined for these executables:\n{listed}\n"
+            f"Remove them from the directory, or build the rest by pointing at "
+            f"a directory that excludes them."
+        )
+
+    return plans
+
+
+def _refuse_mixed_names(
+    candidates: tuple[discover.Candidate, ...], *, aliases: list[str] | None
+) -> None:
+    """Refuse a batch whose binaries would install under different names.
+
+    The alias defaults to the file name, so a directory of `tool-linux` and
+    `tool-darwin` would produce one package whose command changes with the
+    platform it was installed on. That is broken in a way nothing downstream
+    would catch, and naming the alias explicitly is the fix.
+    """
+    if aliases or len(candidates) < 2:
+        return
+    names: set[str] = {default_alias(c.path.name) for c in candidates}
+    if len(names) == 1:
+        return
+    listed: str = ", ".join(sorted(names))
+    raise WheelbarrowError(
+        f"the executables are not all named the same ({listed}), so each wheel "
+        f"would expose a different command and the installed name would depend "
+        f"on the platform. Pass --alias to give them all one name."
+    )
 
 
 def _note_tagging_caveats(info: BinaryInfo, tag: str) -> None:
@@ -552,28 +728,6 @@ def _human_size(size: float) -> str:
             return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
         size /= 1024
     return f"{size} B"  # pragma: no cover - loop always returns
-
-
-def _resolve_tag(
-    binary: Path,
-    override: str | None,
-    *,
-    glibc: str | None,
-    macos_min: str | None,
-    universal2: bool,
-) -> tuple[BinaryInfo | None, str]:
-    """Return the platform tag to use, and the inspection result if we have one."""
-    if override:
-        return None, override
-
-    info: BinaryInfo = inspect_binary(binary)
-    tag: str = platform_tag(
-        info,
-        glibc_version=glibc,
-        macos_min=_parse_macos_min(macos_min),
-        universal2=universal2,
-    )
-    return info, tag
 
 
 def _parse_macos_min(value: str | None) -> tuple[int, int] | None:

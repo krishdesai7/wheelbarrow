@@ -146,7 +146,7 @@ def make_spec(
     module: str = _module_name(dist_name)
     normalised_version: str = _normalise_version(version)
 
-    resolved_aliases: list[str] = aliases or [_default_alias(binary_name)]
+    resolved_aliases: list[str] = aliases or [default_alias(binary_name)]
     for alias in resolved_aliases:
         if not alias or not _ALIAS_RE.fullmatch(alias):
             raise MetadataError(
@@ -208,7 +208,8 @@ def _normalise_version(version: str) -> str:
         ) from exc
 
 
-def _default_alias(binary_name: str) -> str:
+def default_alias(binary_name: str) -> str:
+    """The console script name a binary gets when none was asked for."""
     return Path(binary_name).stem or binary_name
 
 
