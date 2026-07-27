@@ -10,10 +10,38 @@ readme = "README.md"
 version = "1.0.0"
 requires-python = ">=3.14"
 authors = [{ name = "Krish Desai", email = "krish@desai.ml" }]
-keywords = []
+keywords = [
+    "wheel",
+    "packaging",
+    "pypi",
+    "binary",
+    "executable",
+    "cli",
+    "distribution",
+    "cross-platform",
+    "platform-tag",
+    "manylinux",
+]
 license="MIT OR Apache-2.0"
 license-files = ["LICENSE-APACHE", "LICENSE-MIT"]
-classifiers = []
+# No `License ::` classifier: those are deprecated under PEP 639, and PyPI
+# rejects metadata carrying both them and the `license` expression above.
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    # The wheels it *produces* are platform-specific; wheelforge itself reads
+    # headers off disk and infers nothing from the host, so it runs anywhere.
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: System :: Archiving :: Packaging",
+    "Topic :: System :: Software Distribution",
+    "Typing :: Typed",
+]
 dependencies = [
     "build>=1.2",
     "packaging>=24.0",

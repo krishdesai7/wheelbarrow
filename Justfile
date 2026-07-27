@@ -5,7 +5,7 @@
 alias m := mutable
 mutable:
     uv sync -U
-    uv run pyrefly infer
+    uv run pyrefly infer --return-types --parameter-types --imports --containers
     uv format
     uv run ruff check --fix --unsafe-fixes
     uv run pytest -q
