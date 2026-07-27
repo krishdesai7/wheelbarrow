@@ -68,9 +68,9 @@ def _walk(root: Path) -> Discovery:
     if not candidates:
         examined: str = f"{len(skipped)} file(s) examined" if skipped else "it is empty"
         raise InspectionError(
-            f"{root} holds no executable wheelbarrow can recognise ({examined}). "
+            f"{root} holds no executable wheelforge can recognise ({examined}). "
             f"If the binaries are still inside downloaded archives, unpack them "
-            f"first -- `wheelbarrow fetch` does that as it downloads."
+            f"first -- `wheelforge fetch` does that as it downloads."
         )
 
     return Discovery(tuple(candidates), tuple(skipped))

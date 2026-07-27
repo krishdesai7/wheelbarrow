@@ -6,8 +6,8 @@ import struct
 
 import pytest
 
-from wheelbarrow.errors import InspectionError
-from wheelbarrow.probe import inspect_binary
+from wheelforge.errors import InspectionError
+from wheelforge.probe import inspect_binary
 
 from .conftest import (
     GLIBC_INTERP,

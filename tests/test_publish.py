@@ -6,8 +6,8 @@ from typing import NamedTuple
 
 import pytest
 
-from wheelbarrow.errors import PublishError
-from wheelbarrow.publish import (
+from wheelforge.errors import PublishError
+from wheelforge.publish import (
     TOKEN_ENV,
     plan_publish,
     resolve_token,
@@ -119,7 +119,7 @@ class TestRunPublish:
         def fail(*_args, **_kwargs):  # pragma: no cover - must not be reached
             raise AssertionError("uv publish was invoked without a token")
 
-        monkeypatch.setattr("wheelbarrow.publish.subprocess.run", fail)
+        monkeypatch.setattr("wheelforge.publish.subprocess.run", fail)
         with pytest.raises(PublishError, match=TOKEN_ENV):
             run_publish(plan_publish([wheel]))
 
@@ -133,7 +133,7 @@ class TestRunPublish:
             kwargs_seen.update(kwargs)
             return FakeCompleted(0)
 
-        monkeypatch.setattr("wheelbarrow.publish.subprocess.run", capture)
+        monkeypatch.setattr("wheelforge.publish.subprocess.run", capture)
         run_publish(plan_publish([wheel]))
 
         assert argv_seen  # the fake really was called
@@ -144,7 +144,7 @@ class TestRunPublish:
     @pytest.mark.usefixtures("token_set")
     def test_a_failing_upload_is_reported(self, wheel, monkeypatch) -> None:
         monkeypatch.setattr(
-            "wheelbarrow.publish.subprocess.run",
+            "wheelforge.publish.subprocess.run",
             lambda argv, **_kwargs: FakeCompleted(1),  # ruff: ignore[unused-lambda-argument]
         )
         with pytest.raises(PublishError, match="not published"):

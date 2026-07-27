@@ -12,7 +12,7 @@ from typing import Self
 
 import pytest
 
-from wheelbarrow.pypi import DEFAULT_TIMEOUT, NameStatus, check_name
+from wheelforge.pypi import DEFAULT_TIMEOUT, NameStatus, check_name
 
 
 class FakeResponse:
@@ -41,7 +41,7 @@ def calls(monkeypatch):
             raise outcome
         return outcome
 
-    monkeypatch.setattr("wheelbarrow.pypi.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("wheelforge.pypi.urllib.request.urlopen", fake_urlopen)
     return seen, reply
 
 
@@ -108,7 +108,7 @@ class TestRequest:
     def test_identifies_itself(self, calls) -> None:
         seen, _ = calls
         check_name("demo-bin")
-        assert "wheelbarrow" in seen[0]["request"].get_header("User-agent")
+        assert "wheelforge" in seen[0]["request"].get_header("User-agent")
 
     def test_a_timeout_is_always_set(self, calls) -> None:
         """Without one, a hung index would hang the build."""

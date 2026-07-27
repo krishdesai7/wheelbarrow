@@ -220,10 +220,10 @@ def _describe_tag(info: BinaryInfo, tag: str) -> str:
 class PackageSpec:
     """Everything needed to render a project, already validated."""
 
-    dist_name: str  # PEP 503 normalised, e.g. "wheelbarrow-bin"
-    module: str  # importable, e.g. "wheelbarrow_bin"
+    dist_name: str  # PEP 503 normalised, e.g. "wheelforge-bin"
+    module: str  # importable, e.g. "wheelforge_bin"
     version: str  # PEP 440 normalised
-    binary_name: str  # file name inside bin/, e.g. "wb"
+    binary_name: str  # file name inside bin/, e.g. "wf"
     aliases: list[str]  # console scripts to expose
     platform_tag: str
     launcher: Launcher = Launcher.DIRECT

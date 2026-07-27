@@ -69,7 +69,7 @@ def build_wheel(
                 env.install(builder.get_requires_for_build("wheel"))
                 built: str = builder.build("wheel", str(output_dir))
         else:
-            # uv_build is a direct dependency of wheelbarrow, so the backend
+            # uv_build is a direct dependency of wheelforge, so the backend
             # is already importable and we can skip building a venv.
             builder = ProjectBuilder(project_root, runner=runner)
             built = builder.build("wheel", str(output_dir))
@@ -105,7 +105,7 @@ def build_package(
     output_dir = Path(output_dir)
     tag: str = full_tag(spec.platform_tag)
 
-    with tempfile.TemporaryDirectory(prefix="wheelbarrow-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="wheelforge-") as tmp:
         project_root: Path = Path(tmp) / spec.dist_name
         project_root.mkdir(parents=True)
         scaffold_project(spec, binary, project_root)

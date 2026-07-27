@@ -1,37 +1,37 @@
-# Wheelbarrow
+# Wheelforge
 
 Convert OS binaries into PyPI-installable Python wheels.
 
-A variety of tools ship only as prebuilt binaries, or as standalone shell scripts, and can therefore only be installed through a system package manager. Wheelbarrow wraps such executables in a correctly tagged wheel so they can be installed with Python's tooling:
+A variety of tools ship only as prebuilt binaries, or as standalone shell scripts, and can therefore only be installed through a system package manager. Wheelforge wraps such executables in a correctly tagged wheel so they can be installed with Python's tooling:
 
 ```zsh
 uv tool install <tool-name>
 ```
 
-## Installing Wheelbarrow
+## Installing Wheelforge
 
-Wheelbarrow is available as [`wheelbarrow`](https://pypi.org/project/wheelbarrow/) on PyPI.
+Wheelforge is available as [`wheelforge`](https://pypi.org/project/wheelforge/) on PyPI.
 
-Wheelbarrow can be invoked directly with [`uvx`](https://docs.astral.sh/uv/guides/tools/#running-tools):
+Wheelforge can be invoked directly with [`uvx`](https://docs.astral.sh/uv/guides/tools/#running-tools):
 
 ```zsh
-uvx wheelbarrow build <binary>
+uvx wheelforge build <binary>
 ```
 
 Or installed with `uv` (recommended), `pip` or `pipx`:
 
 ```zsh
-# Install Wheelbarrow globally.
-$ uv tool install wheelbarrow@latest
+# Install Wheelforge globally.
+$ uv tool install wheelforge@latest
 
-# Or add Wheelbarrow to your project.
-$ uv add --dev wheelbarrow
+# Or add Wheelforge to your project.
+$ uv add --dev wheelforge
 
 # With pip.
-$ pip install wheelbarrow
+$ pip install wheelforge
 
 # With pipx.
-$ pipx install wheelbarrow
+$ pipx install wheelforge
 ```
 
 ## Quick start
@@ -40,14 +40,14 @@ Most tools you want to package are published as a GitHub release, so `fetch` get
 and checks them in one step:
 
 ```zsh
-$ wheelbarrow fetch https://github.com/starship/starship/releases/tag/v1.26.0 ~/starship
+$ wheelforge fetch https://github.com/starship/starship/releases/tag/v1.26.0 ~/starship
 starship/starship v1.26.0 -- 12 of 30 assets selected
   ok starship-aarch64-apple-darwin.tar.gz (3.9 MiB, the GitHub API)
   ok starship-aarch64-unknown-linux-musl.tar.gz (4.6 MiB, the GitHub API)
   ...
 fetched 12 asset(s) into ~/starship, 12 executable(s) extracted
 check what they are:
-  wheelbarrow inspect ~/starship
+  wheelforge inspect ~/starship
 ```
 
 Every asset is verified before it is unpacked, and each archive lands in a directory
@@ -57,14 +57,14 @@ the common case. See [Fetching release assets](#fetching-release-assets) for the
 `build` then takes that whole directory and turns it into one wheel per platform:
 
 ```zsh
-$ wheelbarrow build ~/starship -n py-starship -V 1.26.0
+$ wheelforge build ~/starship -n py-starship -V 1.26.0
 building 11 wheels from 11 executables in ~/starship
   ok py_starship-1.26.0-py3-none-macosx_11_0_arm64.whl (3.9 MiB)
   ok py_starship-1.26.0-py3-none-manylinux_2_17_aarch64.musllinux_1_2_aarch64.whl (4.6 MiB)
   ...
 built 11 wheels into dist (launcher direct, scripts starship)
 check what would be uploaded:
-  wheelbarrow publish dist/*.whl --dry-run
+  wheelforge publish dist/*.whl --dry-run
 ```
 
 Each command ends by naming the one that usually follows it, so the pipeline is
@@ -78,7 +78,7 @@ for what `build` refuses and why.
 A single binary works exactly as before, with a more detailed report:
 
 ```zsh
-$ wheelbarrow build ./<binary> --name <tool-name> --version <version> --alias <alias>
+$ wheelforge build ./<binary> --name <tool-name> --version <version> --alias <alias>
 built dist/<tool-name>-<version>-py3-none-<platform-tag>.whl (<size>)
   tag       <platform-tag>
   launcher  direct
@@ -96,15 +96,15 @@ $ <alias> --version
 
 ## Fetching release assets
 
-`wheelbarrow fetch` replaces the download-verify-extract routine you would otherwise do
+`wheelforge fetch` replaces the download-verify-extract routine you would otherwise do
 by hand. It takes a release URL — or `owner/repo` with `--tag`, or neither for the latest
 release — and a directory to work in.
 
 ```zsh
-wheelbarrow fetch <release-url> <dir> -p '<glob>'
+wheelforge fetch <release-url> <dir> -p '<glob>'
 ```
 
-It talks to the GitHub API directly rather than shelling out to `gh`, so `uvx wheelbarrow`
+It talks to the GitHub API directly rather than shelling out to `gh`, so `uvx wheelforge`
 works on a machine with nothing else installed. Public releases need no credentials. A
 token is read from `GH_TOKEN` or `GITHUB_TOKEN` when one is set, for private repositories
 and for the larger rate limit; as with the publish token there is deliberately no
@@ -112,11 +112,11 @@ and for the larger rate limit; as with the publish token there is deliberately n
 
 ### Selecting assets
 
-`--pattern` is optional. Left out, you get every asset wheelbarrow could build a wheel
+`--pattern` is optional. Left out, you get every asset wheelforge could build a wheel
 from, which for a typical release is the whole thing:
 
 ```zsh
-wheelbarrow fetch <release-url> <dir>
+wheelforge fetch <release-url> <dir>
 ```
 
 Give one or more `--pattern` globs to narrow that. Anything matching nothing is an error
@@ -129,12 +129,12 @@ Two kinds of asset are never treated as payload, even when a pattern matches the
 - **Checksum files**, which is what lets `'*.tar.gz*'` — the natural way to ask for the
   tarballs — do the obvious thing rather than trying to unpack a `.sha256` alongside them.
 - **Anything that cannot become a wheel**: installers (`.msi`, `.deb`, `.rpm`, `.dmg`, …),
-  signatures and attestations, documentation. wheelbarrow cannot open an installer to get
+  signatures and attestations, documentation. wheelforge cannot open an installer to get
   at the executable inside, so listing one and declining it later would just send you
   looking for a rename that never happened.
 
 `--list` reports how many it left out and why, so a release of nothing but `.msi` files
-reads as "wheelbarrow cannot use these" rather than as an empty release. An asset with no
+reads as "wheelforge cannot use these" rather than as an empty release. An asset with no
 extension at all is always kept — a release shipping the bare executable is exactly the
 case `build` wants.
 
@@ -197,14 +197,14 @@ directory just means "not a binary", which is the common case rather than an err
 success.
 
 ```zsh
-$ wheelbarrow inspect ~/starship
+$ wheelforge inspect ~/starship
 path                                       platform tag
 starship-aarch64-apple-darwin/starship     macosx_11_0_arm64
 starship-aarch64-unknown-linux-musl/...    manylinux_2_17_aarch64.musllinux_1_2_aarch64
 ...
 11 executable(s), 11 other file(s) ignored
 build the whole directory:
-  wheelbarrow build ~/starship -n <name> -V <version>
+  wheelforge build ~/starship -n <name> -V <version>
 ```
 
 Every wheel in a batch shares one `--name` and `--version`, so the platform tag is the only
@@ -232,7 +232,7 @@ no tag: starship-x86_64-unknown-freebsd/starship: no wheel platform tag exists f
 freebsd; Python packaging defines tags for Linux, macOS and Windows only.
 remove them with: rm -r ~/starship/starship-x86_64-unknown-freebsd ~/starship/starship-x86_64-unknown-freebsd.tar.gz
 then confirm the directory is clean:
-  wheelbarrow inspect ~/starship
+  wheelforge inspect ~/starship
 ```
 
 The archive is named alongside the unpacked directory on purpose: leaving it behind means
@@ -253,10 +253,10 @@ wheelfix.retag_wheel  rewrite the archive with the real platform tag
 
 ### 1. Input inspection
 
-Wheelbarrow reads the binary's own headers, namely, ELF, Mach-O (including universal binaries) and PE/COFF, to recover the target OS, CPU architecture, libc flavour and/or macOS deployment target. Nothing is inferred from the machine one is running on, so cross-packaging works. For example, one can build a Linux wheel from a Mac. A `#!` script has no headers to read and no platform to detect (see [Shell scripts](#shell-scripts)).
+Wheelforge reads the binary's own headers, namely, ELF, Mach-O (including universal binaries) and PE/COFF, to recover the target OS, CPU architecture, libc flavour and/or macOS deployment target. Nothing is inferred from the machine one is running on, so cross-packaging works. For example, one can build a Linux wheel from a Mac. A `#!` script has no headers to read and no platform to detect (see [Shell scripts](#shell-scripts)).
 
 ```zsh
-$ wheelbarrow inspect ./rg-linux
+$ wheelforge inspect ./rg-linux
 file       ./rg-linux
 format     elf
 os         linux
@@ -316,7 +316,7 @@ When a directory is built as a batch, every wheel's README describes the **whole
 - **`manylinux_2_17_x86_64.musllinux_1_2_x86_64`**
   ELF executable, linux/x86_64, statically linked
   sha256 `3696a6cf…`
-…
+  …
 ```
 
 PyPI shows one description for a project and takes it from one of the uploaded files, so a README naming only its own binary would be wrong on that page for everyone who installed a different platform's wheel. Listing the set makes every wheel's README byte-identical, which is what makes PyPI's choice of file not matter. The per-tag explanation is dropped in this mode — each one explains a single tag, and eleven tags do not share an explanation.
@@ -329,7 +329,7 @@ In `direct` mode the staged file _becomes_ the installed command, so it is named
 
 ### 4. Wheel compilation and tagging
 
-`build.ProjectBuilder` drives the backend over PEP 517. Because the generated project looks pure-Python to the backend, the resulting wheel is `py3-none-any`; wheelbarrow then rewrites the archive to:
+`build.ProjectBuilder` drives the backend over PEP 517. Because the generated project looks pure-Python to the backend, the resulting wheel is `py3-none-any`; wheelforge then rewrites the archive to:
 
 - Set the platform tag in both the file name and `WHEEL`,
 - Set `Root-Is-Purelib` to match it: `false` for a real platform tag, `true` for `any`,
@@ -365,10 +365,10 @@ Detected platforms map to tags as follows.
 | `#!` script                    | `any`                               | Any (no machine code) |
 | ELF, non-Linux `EI_OSABI`      | _refused_                           | FreeBSD, NetBSD, …    |
 
-ELF is not a Linux format. FreeBSD, NetBSD, OpenBSD and Solaris binaries are ELF too, and are identical to Linux ones in machine and libc; only `EI_OSABI` tells them apart. Python packaging defines no tag for those systems, so wheelbarrow names the system and refuses rather than passing a FreeBSD binary off as `manylinux`:
+ELF is not a Linux format. FreeBSD, NetBSD, OpenBSD and Solaris binaries are ELF too, and are identical to Linux ones in machine and libc; only `EI_OSABI` tells them apart. Python packaging defines no tag for those systems, so wheelforge names the system and refuses rather than passing a FreeBSD binary off as `manylinux`:
 
 ```zsh
-$ wheelbarrow inspect ./starship-x86_64-unknown-freebsd
+$ wheelforge inspect ./starship-x86_64-unknown-freebsd
 error: no wheel platform tag exists for freebsd; Python packaging defines tags
 for Linux, macOS and Windows only. Pass --platform-tag explicitly to package it
 anyway.
@@ -378,9 +378,9 @@ The macOS minimum comes from the binary's `LC_BUILD_VERSION` when present. It ca
 
 ### Static binaries claim both libc families
 
-A platform tag says where an installer may *place* a wheel, not merely where the code can run. pip on Alpine accepts only `musllinux_*` tags, so tagging a statically linked binary `manylinux` alone withholds it from exactly the systems a static build exists to serve — while tagging it `musllinux` alone abandons every glibc user on architectures that ship no glibc build.
+A platform tag says where an installer may _place_ a wheel, not merely where the code can run. pip on Alpine accepts only `musllinux_*` tags, so tagging a statically linked binary `manylinux` alone withholds it from exactly the systems a static build exists to serve — while tagging it `musllinux` alone abandons every glibc user on architectures that ship no glibc build.
 
-Neither is true, so wheelbarrow emits both, as a PEP 425 compressed tag set:
+Neither is true, so wheelforge emits both, as a PEP 425 compressed tag set:
 
 ```
 py_starship-1.26.0-py3-none-manylinux_2_17_x86_64.musllinux_1_2_x86_64.whl
@@ -390,17 +390,17 @@ One wheel, honestly installable under either libc. The file name compresses the 
 
 ### The glibc floor is measured, not assumed
 
-For a *dynamically* linked glibc binary the manylinux baseline is read out of `.gnu.version_r` — the highest `GLIBC_x.y` symbol version the binary imports:
+For a _dynamically_ linked glibc binary the manylinux baseline is read out of `.gnu.version_r` — the highest `GLIBC_x.y` symbol version the binary imports:
 
 ```zsh
-$ wheelbarrow inspect ./starship-x86_64-unknown-linux-gnu
+$ wheelforge inspect ./starship-x86_64-unknown-linux-gnu
 ...
 libc         glibc
 glibc min    2.18
 wheel tag    py3-none-manylinux_2_18_x86_64
 ```
 
-This matters more than one version's difference suggests: RHEL and CentOS 7 ship glibc *exactly* 2.17, so a default `manylinux_2_17` tag on a binary needing 2.18 installs there and then dies with `version GLIBC_2.18 not found`.
+This matters more than one version's difference suggests: RHEL and CentOS 7 ship glibc _exactly_ 2.17, so a default `manylinux_2_17` tag on a binary needing 2.18 installs there and then dies with `version GLIBC_2.18 not found`.
 
 A measurement can only raise the floor, never lower it. A binary importing nothing newer than 2.5 is not evidence that it runs on a 2.5 system, so the per-architecture default stays a lower bound. `--glibc` overrides both.
 
@@ -409,7 +409,7 @@ A measurement can only raise the floor, never lower it. A binary importing nothi
 Not every tool is machine code. A file beginning with `#!` is recognised as a script and needs no special handling:
 
 ```zsh
-$ wheelbarrow inspect ./greet.sh
+$ wheelforge inspect ./greet.sh
 file         ./greet.sh
 format       script
 os           any
@@ -420,10 +420,10 @@ wheel tag    py3-none-any
 
 Nothing in a script constrains where it can be installed, so it is tagged `any` and the wheel is marked `Root-Is-Purelib: true`. The file extension is dropped when deriving the default alias, so `greet.sh` installs as `greet`. Everything else — the executable bit, both launchers, `binary_path()`, `python -m` — behaves exactly as it does for a binary.
 
-The one caveat is that `any` is broader than the truth. A wheel tagged `any` installs on Windows too, where `/bin/sh` does not exist, and no wheel tag can express "needs a POSIX shell". Wheelbarrow says so when it builds one:
+The one caveat is that `any` is broader than the truth. A wheel tagged `any` installs on Windows too, where `/bin/sh` does not exist, and no wheel tag can express "needs a POSIX shell". Wheelforge says so when it builds one:
 
 ```zsh
-$ wheelbarrow build ./greet.sh --name greet-bin --version 0.1.0
+$ wheelforge build ./greet.sh --name greet-bin --version 0.1.0
 note: greet.sh is a script run by /usr/bin/env bash, so the wheel is tagged any
 and will install anywhere, including where that interpreter does not exist. Pass
 --platform-tag to narrow it.
@@ -434,10 +434,10 @@ If the script is POSIX-only and that matters, restrict it explicitly with `--pla
 
 ## Checking the project name
 
-Before building, wheelbarrow asks PyPI whether `--name` is already registered, with a `HEAD` of `https://pypi.org/simple/<name>/`: 200 means the name exists, 404 means it is free to claim. A registered name stays 200 even after every release has been deleted or yanked, so it cannot be reclaimed.
+Before building, wheelforge asks PyPI whether `--name` is already registered, with a `HEAD` of `https://pypi.org/simple/<name>/`: 200 means the name exists, 404 means it is free to claim. A registered name stays 200 even after every release has been deleted or yanked, so it cannot be reclaimed.
 
 ```zsh
-$ wheelbarrow build ./rg --name ripgrep-bin --version 14.1.0
+$ wheelforge build ./rg --name ripgrep-bin --version 14.1.0
 note: ripgrep-bin is already registered on PyPI. Publishing will only work if
       the project is yours; otherwise choose a different --name.
 built dist/ripgrep_bin-14.1.0-py3-none-macosx_11_0_arm64.whl (4.8 MiB)
@@ -445,12 +445,12 @@ built dist/ripgrep_bin-14.1.0-py3-none-macosx_11_0_arm64.whl (4.8 MiB)
 
 This is advice, not a gate. It never fails the build, because a 200 cannot tell your own project apart from someone else's, and rebuilding a package you already own is the usual case. A free name is not remarked on.
 
-The lookup adds roughly 100 ms and is the only time wheelbarrow touches the network while building. If the index cannot be reached the build carries on regardless — pass `--verbose` to see that it was skipped, or `--no-check-name` to not ask at all. Building a directory asks once for the whole batch, since every wheel in it carries the same project name.
+The lookup adds roughly 100 ms and is the only time wheelforge touches the network while building. If the index cannot be reached the build carries on regardless — pass `--verbose` to see that it was skipped, or `--no-check-name` to not ask at all. Building a directory asks once for the whole batch, since every wheel in it carries the same project name.
 
 ## Publishing
 
 ```zsh
-$ wheelbarrow publish dist/<tool-name>_bin-<version>-py3-none-<platform-tag>.whl --index <index-name>
+$ wheelforge publish dist/<tool-name>_bin-<version>-py3-none-<platform-tag>.whl --index <index-name>
 About to publish 1 file(s) to <index-name>:
   dist/<tool-name>_bin-<version>-py3-none-<platform-tag>.whl
 This cannot be undone: a released version cannot be re-uploaded.
@@ -466,16 +466,16 @@ The API token is read from `UV_PUBLISH_TOKEN` in the environment. There is delib
 export UV_PUBLISH_TOKEN=pypi-...
 ```
 
-Wheelbarrow checks for it before asking for confirmation, so a missing token is reported straight away rather than after you have committed to the upload. Note that a `.env` file is not loaded automatically; either export the variable or run `uv run --env-file .env wheelbarrow publish ...`.
+Wheelforge checks for it before asking for confirmation, so a missing token is reported straight away rather than after you have committed to the upload. Note that a `.env` file is not loaded automatically; either export the variable or run `uv run --env-file .env wheelforge publish ...`.
 
 To publish one package for several platforms, build a wheel per binary and upload them together; installers pick the right one by its platform tag. Point `build` at the directory and it does the whole set at once:
 
 ```zsh
-wheelbarrow fetch <release-url> ~/<tool-name>
-wheelbarrow inspect ~/<tool-name>
-wheelbarrow build ~/<tool-name> -n <tool-name>-bin -V <version> -o dist
-wheelbarrow publish dist/*.whl --dry-run
-wheelbarrow publish dist/*.whl
+wheelforge fetch <release-url> ~/<tool-name>
+wheelforge inspect ~/<tool-name>
+wheelforge build ~/<tool-name> -n <tool-name>-bin -V <version> -o dist
+wheelforge publish dist/*.whl --dry-run
+wheelforge publish dist/*.whl
 ```
 
 Every wheel in that set shares a name and version, so `dist/*.whl` uploads them in one call. `build` refuses up front if two of them would collide on a tag, which is what makes the glob safe to use. The `inspect` step is optional but cheap: it is where an untaggable binary shows up, along with the `rm -r` that clears it, rather than at the point `build` refuses the batch.
@@ -523,7 +523,7 @@ In `direct` mode `binary_path()` locates the installed file rather than computin
 ## Command reference
 
 ```zsh
-wheelbarrow fetch SOURCE [DIR]         token comes from $GH_TOKEN or $GITHUB_TOKEN
+wheelforge fetch SOURCE [DIR]         token comes from $GH_TOKEN or $GITHUB_TOKEN
     -t, --tag TAG             release tag, if SOURCE has none
     -p, --pattern GLOB        asset names to download (repeatable)
         --list                show the release's assets and exit
@@ -531,9 +531,9 @@ wheelbarrow fetch SOURCE [DIR]         token comes from $GH_TOKEN or $GITHUB_TOK
         --allow-unverified    download assets that publish no checksum
         --timeout SECONDS     per-request timeout (default: 30)
 
-wheelbarrow inspect PATH [--glibc VERSION]      an executable, or a directory of them
+wheelforge inspect PATH [--glibc VERSION]      an executable, or a directory of them
 
-wheelbarrow build PATH --name NAME --version VERSION
+wheelforge build PATH --name NAME --version VERSION
     -a, --alias NAME          console script to expose (repeatable)
     -o, --output DIR          output directory (default: dist)
     -d, --description TEXT
@@ -553,26 +553,26 @@ wheelbarrow build PATH --name NAME --version VERSION
         --no-check-name       skip the PyPI name lookup (see below)
     -v, --verbose             show build backend output
 
-wheelbarrow publish WHEELS...      token comes from $UV_PUBLISH_TOKEN
+wheelforge publish WHEELS...      token comes from $UV_PUBLISH_TOKEN
         --index NAME | --publish-url URL
         --username NAME
         --dry-run             print the uv command without running it
     -y, --yes                 skip the confirmation prompt
 
-wheelbarrow help [COMMAND]    same as `wheelbarrow COMMAND --help`
+wheelforge help [COMMAND]    same as `wheelforge COMMAND --help`
 ```
 
-Running a command with no arguments at all prints its help, so `wheelbarrow build`,
-`wheelbarrow help build` and `wheelbarrow build --help` are interchangeable.
+Running a command with no arguments at all prints its help, so `wheelforge build`,
+`wheelforge help build` and `wheelforge build --help` are interchangeable.
 
 ## Notes and limitations
 
-- Wheelbarrow only repackages binaries. It never compiles or modifies them.
+- Wheelforge only repackages binaries. It never compiles or modifies them.
 - For a dynamically linked glibc binary the manylinux floor is measured from `.gnu.version_r`, and `manylinux_2_17` is only the lower bound it can never fall below. The measurement records the highest glibc symbol the binary imports, which is a good proxy for what it needs but not a guarantee; `--glibc` overrides it. Statically linked binaries, the most common case for Rust and Go tools, are unaffected.
 - One wheel carries one binary for one platform. Tools that need companion files (man pages, completions, shared libraries) are out of scope. Building a directory produces one such wheel per binary; it does not combine them.
 - Symlinks are skipped when walking a directory, so a link beside its target is not packaged a second time under the link's name.
 - Generated projects use the `uv_build` backend, which is pinned to a narrow range (`>=0.11.30,<0.12`). A project kept with `--keep-project` and rebuilt much later may need that pin refreshed.
-- In `direct` mode each alias is a separate copy of the binary in the wheel. Wheelbarrow warns when more than one alias is requested.
+- In `direct` mode each alias is a separate copy of the binary in the wheel. Wheelforge warns when more than one alias is requested.
 - Check the upstream licence before republishing someone else's binary.
 
 ## Development

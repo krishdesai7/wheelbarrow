@@ -8,9 +8,9 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from wheelbarrow.errors import MetadataError
-from wheelbarrow.probe import inspect_binary
-from wheelbarrow.scaffold import (
+from wheelforge.errors import MetadataError
+from wheelforge.probe import inspect_binary
+from wheelforge.scaffold import (
     SCRIPTS_DIR,
     Launcher,
     PackageSpec,
@@ -33,9 +33,9 @@ if TYPE_CHECKING:
 
 def spec(**overrides) -> PackageSpec:
     kwargs: dict[str, str] = {
-        "name": "wheelbarrow-bin",
+        "name": "wheelforge-bin",
         "version": "15.2.0",
-        "binary_name": "wb",
+        "binary_name": "wf",
         "platform_tag": "macosx_11_0_arm64",
     }
     kwargs.update(overrides)
@@ -46,8 +46,8 @@ class TestNameNormalisation:
     @pytest.mark.parametrize(
         ("given", "dist", "module"),
         [
-            ("wheelbarrow-bin", "wheelbarrow-bin", "wheelbarrow_bin"),
-            ("Wheelbarrow_Bin", "wheelbarrow-bin", "wheelbarrow_bin"),
+            ("wheelforge-bin", "wheelforge-bin", "wheelforge_bin"),
+            ("Wheelforge_Bin", "wheelforge-bin", "wheelforge_bin"),
             ("bw.barrowwheel", "bw-barrowwheel", "bw_barrowwheel"),
             ("Some--Tool", "some-tool", "some_tool"),
         ],
@@ -90,16 +90,16 @@ class TestAliases:
         assert spec(binary_name="rg.exe").aliases == ["rg"]
 
     def test_multiple_aliases_are_kept(self) -> None:
-        assert spec(aliases=["wb", "wheelbarrow"]).aliases == ["wb", "wheelbarrow"]
+        assert spec(aliases=["wf", "wheelforge"]).aliases == ["wf", "wheelforge"]
 
     def test_invalid_alias_is_rejected(self) -> None:
         with pytest.raises(MetadataError, match="invalid console script alias"):
-            spec(aliases=["wb; rm -rf /"])
+            spec(aliases=["wf; rm -rf /"])
 
 
 class TestStaging:
     def test_binary_is_made_executable(self, tmp_path) -> None:
-        source = tmp_path / "wb"
+        source = tmp_path / "wf"
         source.write_bytes(b"binary contents")
         source.chmod(0o644)  # as it would arrive from a zip archive
 
@@ -111,7 +111,7 @@ class TestStaging:
         assert destination.read_bytes() == b"binary contents"
 
     def test_source_permissions_do_not_leak(self, tmp_path) -> None:
-        source = tmp_path / "wb"
+        source = tmp_path / "wf"
         source.write_bytes(b"x")
         source.chmod(0o600)
         destination = tmp_path / "staged"
@@ -156,13 +156,13 @@ class TestProjectRenderingCommon:
         data = tomllib.loads((root / "pyproject.toml").read_text())
         assert data["build-system"]["build-backend"] == "uv_build"
         assert data["build-system"]["requires"] == ["uv_build>=0.11.30,<0.12"]
-        assert data["tool"]["uv"]["build-backend"]["module-name"] == "wheelbarrow_bin"
+        assert data["tool"]["uv"]["build-backend"]["module-name"] == "wheelforge_bin"
         assert data["tool"]["uv"]["build-backend"]["module-root"] == "src"
 
     def test_common_metadata(self, project) -> None:
         root, _ = project
         data = tomllib.loads((root / "pyproject.toml").read_text())
-        assert data["project"]["name"] == "wheelbarrow-bin"
+        assert data["project"]["name"] == "wheelforge-bin"
         assert data["project"]["version"] == "15.2.0"
         assert data["project"]["urls"]["Homepage"] == "https://example.com"
         assert data["project"]["keywords"] == ["search", "grep"]
@@ -200,25 +200,25 @@ class TestProjectRenderingCommon:
 
     def test_readme_mentions_the_install_command(self, project) -> None:
         root, _ = project
-        assert "uv tool install wheelbarrow-bin" in (root / "README.md").read_text()
+        assert "uv tool install wheelforge-bin" in (root / "README.md").read_text()
 
 
 class TestDirectLauncher:
     @pytest.fixture
     def project(self, tmp_path, elf_binary) -> tuple[Path, PackageSpec]:
-        return build_project(tmp_path, elf_binary, aliases=["wb", "wheelbarrow"])
+        return build_project(tmp_path, elf_binary, aliases=["wf", "wheelforge"])
 
     def test_binary_is_staged_outside_the_module(self, project) -> None:
         """Inside `src/` it would also be swept in as package data."""
         root, s = project
-        assert (root / SCRIPTS_DIR / "wb").is_file()
+        assert (root / SCRIPTS_DIR / "wf").is_file()
         assert not (root / "src" / s.module / "bin").exists()
 
     def test_one_copy_per_alias_named_after_the_alias(self, project) -> None:
         root, s = project
         assert staged_paths(s, root) == [
-            root / SCRIPTS_DIR / "wb",
-            root / SCRIPTS_DIR / "wheelbarrow",
+            root / SCRIPTS_DIR / "wf",
+            root / SCRIPTS_DIR / "wheelforge",
         ]
 
     def test_no_console_scripts(self, project) -> None:
@@ -235,8 +235,8 @@ class TestDirectLauncher:
     def test_archive_paths_target_the_data_directory(self, project) -> None:
         _, s = project
         assert archive_executables(s) == {
-            "wheelbarrow_bin-15.2.0.data/scripts/wb",
-            "wheelbarrow_bin-15.2.0.data/scripts/wheelbarrow",
+            "wheelforge_bin-15.2.0.data/scripts/wf",
+            "wheelforge_bin-15.2.0.data/scripts/wheelforge",
         }
 
     def test_installed_name_follows_the_first_alias(self) -> None:
@@ -287,8 +287,8 @@ class TestWindowsSuffix:
         s = spec(binary_name="tool.exe", aliases=["tool", "othertool"])
         assert s.installed_names == ["tool.exe", "othertool.exe"]
         assert archive_executables(s) == {
-            "wheelbarrow_bin-15.2.0.data/scripts/tool.exe",
-            "wheelbarrow_bin-15.2.0.data/scripts/othertool.exe",
+            "wheelforge_bin-15.2.0.data/scripts/tool.exe",
+            "wheelforge_bin-15.2.0.data/scripts/othertool.exe",
         }
 
     def test_shim_mode_is_untouched(self) -> None:
@@ -310,24 +310,24 @@ class TestShimLauncher:
     @pytest.fixture
     def project(self, tmp_path, elf_binary) -> tuple[Path, PackageSpec]:
         return build_project(
-            tmp_path, elf_binary, launcher=Launcher.SHIM, aliases=["wb", "wheelbarrow"]
+            tmp_path, elf_binary, launcher=Launcher.SHIM, aliases=["wf", "wheelforge"]
         )
 
     def test_binary_is_staged_inside_the_package(self, project) -> None:
         root, s = project
-        assert (root / "src" / s.module / "bin" / "wb").is_file()
+        assert (root / "src" / s.module / "bin" / "wf").is_file()
         assert not (root / SCRIPTS_DIR).exists()
 
     def test_one_shared_copy_regardless_of_alias_count(self, project) -> None:
         root, s = project
-        assert staged_paths(s, root) == [root / "src" / s.module / "bin" / "wb"]
+        assert staged_paths(s, root) == [root / "src" / s.module / "bin" / "wf"]
 
     def test_console_scripts_cover_every_alias(self, project) -> None:
         root, _ = project
         data = tomllib.loads((root / "pyproject.toml").read_text())
         assert data["project"]["scripts"] == {
-            "wb": "wheelbarrow_bin.__main__:main",
-            "wheelbarrow": "wheelbarrow_bin.__main__:main",
+            "wf": "wheelforge_bin.__main__:main",
+            "wheelforge": "wheelforge_bin.__main__:main",
         }
 
     def test_no_data_scripts_mapping(self, project) -> None:
@@ -337,7 +337,7 @@ class TestShimLauncher:
 
     def test_archive_path_is_inside_the_package(self, project) -> None:
         _, s = project
-        assert archive_executables(s) == {"wheelbarrow_bin/bin/wb"}
+        assert archive_executables(s) == {"wheelforge_bin/bin/wf"}
 
     def test_installed_name_keeps_the_source_file_name(self) -> None:
         s = spec(binary_name="bw-v10", aliases=["bw"], launcher=Launcher.SHIM)
@@ -456,7 +456,7 @@ class TestReadmeProvenance:
         assert tag in text
 
     def test_the_launcher_is_explained_not_just_named(self, write_binary) -> None:
-        """`direct` and `shim` are wheelbarrow's jargon, not a user's."""
+        """`direct` and `shim` are wheelforge's jargon, not a user's."""
         binary = write_binary("tool", make_elf(0x3E))
         direct = self.readme(binary, "any", launcher=Launcher.DIRECT)
         shim = self.readme(binary, "any", launcher=Launcher.SHIM)

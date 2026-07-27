@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from wheelbarrow.errors import InspectionError
-from wheelbarrow.probe import BinaryInfo
-from wheelbarrow.tags import full_tag, platform_tag
+from wheelforge.errors import InspectionError
+from wheelforge.probe import BinaryInfo
+from wheelforge.tags import full_tag, platform_tag
 
 
 def linux(

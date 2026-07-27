@@ -14,11 +14,11 @@ uv run ruff format
 uv run pyrefly check       # note: bare `uv run pyrefly` only prints help
 ```
 
-Run the CLI during development with `uv run wheelbarrow ...`.
+Run the CLI during development with `uv run wheelforge ...`.
 
 ## Architecture
 
-Wheelbarrow wraps a prebuilt native executable in a correctly tagged Python wheel. One pipeline runs
+Wheelforge wraps a prebuilt native executable in a correctly tagged Python wheel. One pipeline runs
 end to end in `builder.build_package` -- `build_packages` is that same pipeline in a loop, for a
 directory -- and each stage is a separate module that can be used alone:
 
@@ -44,20 +44,20 @@ raising, so builds keep working offline, and a `TAKEN` name is a warning, never 
 cannot distinguish your own project from someone else's). Tests stub `urlopen`; never let the
 suite make a real request.
 
-`fetch.py` is network-first by definition, but it sits *before* the build path, not inside it —
+`fetch.py` is network-first by definition, but it sits _before_ the build path, not inside it —
 `build` still never reaches out. Its verification policy is the opposite of `check_name`'s: an
 asset that cannot be verified is fatal, because unverified bytes that become a published wheel
 is exactly the case worth interrupting for. `--allow-unverified` is the escape hatch, and it has
 to stay explicit.
 
-A platform tag states where an installer may *place* a wheel, not where the code can run — the two
+A platform tag states where an installer may _place_ a wheel, not where the code can run — the two
 come apart for a statically linked ELF, which needs no libc at all. `_linux_tag` therefore emits a
 PEP 425 compressed tag set for `libc == "static"` (`manylinux_..._<arch>.musllinux_1_2_<arch>`):
 manylinux alone would withhold it from Alpine, musllinux alone from glibc users on architectures
 with no glibc build. `wheelfix.expand_tags` exists because the file name compresses the set but
 `WHEEL` and `WHEEL.json` take it expanded, one entry per tag.
 
-The manylinux floor for a *dynamic* glibc binary is measured, not defaulted: `probe._elf_glibc_min`
+The manylinux floor for a _dynamic_ glibc binary is measured, not defaulted: `probe._elf_glibc_min`
 reads `.gnu.version_r` for the highest `GLIBC_x.y` imported. `tags._glibc_baseline` takes the max of
 that and `DEFAULT_GLIBC` — a measurement may only raise the floor, since importing nothing newer
 than 2.5 is not evidence a binary runs on a 2.5 system. Getting this wrong by one version is not
@@ -96,7 +96,7 @@ assert this, so do not introduce real timestamps or non-deterministic ordering.
 `discover.collect` is the front door for both `inspect` and `build`, and it keeps the rule
 that nothing is inferred from the host: membership is decided by whether `inspect_binary`
 parses the file, never by the executable bit, which a `.zip` extraction loses and a
-`.tar.gz` never had. The asymmetry to preserve is that an `InspectionError` on a *named*
+`.tar.gz` never had. The asymmetry to preserve is that an `InspectionError` on a _named_
 file propagates while the same error inside a directory only means "not a binary" — that
 is what lets a directory of archives-beside-executables work untouched.
 
@@ -104,7 +104,7 @@ is what lets a directory of archives-beside-executables work untouched.
 detailed `_print_info` view, and in `_plan_builds` it re-raises a tagging failure verbatim
 instead of folding it into the aggregated batch message. Tests depend on both.
 
-Every batch check runs in `_plan_builds`/`refuse_tag_collisions` *before* the first
+Every batch check runs in `_plan_builds`/`refuse_tag_collisions` _before_ the first
 `build_package`, because `_place_wheel` catching a collision on wheel five leaves four
 wheels in `-o` that nothing removes. The three refusals are a tag collision between
 differing binaries (identical ones are a reproducible rebuild, so they are exempt),
@@ -134,7 +134,7 @@ fetch → inspect → build → publish pipeline is only obvious to someone who 
 `_quote` is not `shlex.quote`: it must leave `dist/*.whl` unquoted so the shell still expands it,
 and leave `<name>` placeholders readable. When `inspect` or `build` meets a binary it cannot tag,
 `_removal_advice` prints the literal `rm -r` that clears the directory, naming both the unpacked
-tree *and* the archive beside it — leaving the tarball behind means the next `fetch --extract`
+tree _and_ the archive beside it — leaving the tarball behind means the next `fetch --extract`
 puts the binary straight back. A test parses that line out of the output and runs it, so advice
 naming the wrong paths fails the suite rather than the user.
 
@@ -155,7 +155,7 @@ Digests come from `Asset.digest` (the API's own, computed by GitHub on upload) o
 null, from a checksum file in the release. Both are needed: GitHub only began recording digests
 in 2025 and never backfilled, so any older release falls through to `_sidecar_digest` then
 `_manifest_digest`. `parse_checksums` handles both conventions in the wild, and `allow_bare` is
-what separates them — a lone digest is only meaningful in a file whose *name* says what it
+what separates them — a lone digest is only meaningful in a file whose _name_ says what it
 covers, which is why only the sidecar path passes it.
 
 `is_checksum_asset` keeps checksum files out of the payload set even when a pattern matches them,
@@ -163,9 +163,9 @@ so `'*.tar.gz*'` behaves the way anyone would expect. `unpackable_reason` extend
 assets that could never become a wheel — installers (`.msi`, `.deb`, …), signatures, documentation
 — so `--list` shows what `build` could consume rather than listing a `.msi` and letting the user
 discover three steps later that nothing can open it. Both are stated as a blacklist because the
-asset with *no* extension is the one that matters: a release shipping the bare executable is
+asset with _no_ extension is the one that matters: a release shipping the bare executable is
 exactly what `build` wants, and a whitelist would drop it. The reasons are phrased as plural nouns
-so one string serves both the `--list` footer (`3 installers wheelbarrow cannot unpack`) and the
+so one string serves both the `--list` footer (`3 installers wheelforge cannot unpack`) and the
 error on a pattern that matched only those. `select_assets` raising on a pattern that matches
 nothing is deliberate: a quiet empty result is how an upstream rename turns into a missing wheel
 three steps later.
@@ -189,40 +189,40 @@ touching one, check all of:
 
 - `scaffold.staged_paths` — where the binary is copied before the build (`scripts/<alias>` per alias
   for direct, a single `src/<module>/bin/<binary>` for shim).
-- `scaffold.archive_executables` — the matching member paths *inside* the wheel
+- `scaffold.archive_executables` — the matching member paths _inside_ the wheel
   (`<dist>-<version>.data/scripts/<alias>` vs `<module>/bin/<binary>`); `build_package` fails if this
   set comes back empty.
 - `scaffold.render_pyproject` — direct mode emits `[tool.uv.build-backend.data] scripts = ...` and
   deliberately **no** `[project.scripts]`, because a console script of the same name would overwrite
   the binary at install time. Shim mode is the reverse.
 - `templates.INIT_DIRECT` vs `INIT_SHIM` — shim computes `binary_path()` relative to `__file__`;
-  direct must *locate* the installed file, checking paths beside the package before `sysconfig`
+  direct must _locate_ the installed file, checking paths beside the package before `sysconfig`
   (which describes the running interpreter, and is wrong under `pip install --target`).
 
 `PackageSpec.installed_names` encodes the consequence, and is the single source of truth that
 `staged_paths` and `archive_executables` both derive from — change it and they follow. In direct
-mode the staged file *becomes* the command, so it is named after each alias rather than the source
+mode the staged file _becomes_ the command, so it is named after each alias rather than the source
 file, except that a `WINDOWS_EXEC_SUFFIXES` extension is carried over: `Scripts\starship` without
 the `.exe` is a file Windows will not execute, while a `.sh` on `PATH` is only noise, so the rule
 is deliberately narrow rather than "keep the suffix".
 
 ### Conventions
 
-- All user-facing failures raise a `WheelbarrowError` subclass from `errors.py`. `cli.py` catches
+- All user-facing failures raise a `WheelforgeError` subclass from `errors.py`. `cli.py` catches
   only that base class and turns it into `error: ...` on stderr with exit code 1; anything else
   escaping as a traceback is a bug.
 - Generated file bodies live entirely in `templates.py` as `string.Template` objects — keep them
   readable as the Python/TOML they become, and render TOML values through `toml_str`/`toml_array`
   rather than interpolating raw strings. The generated `README.md` is the wheel's long
-  description, so it is written for whoever installs the package: no wheelbarrow jargon
+  description, so it is written for whoever installs the package: no wheelforge jargon
   (`LAUNCHER_NOTES` exists because "direct" and "shim" mean nothing on a PyPI page), and nothing
   the input may not be — a `#!` script is a "program", never "a prebuilt executable".
 - `scaffold.describe_input` builds the README's provenance block, and `_describe_tag` is the part
-  to be careful with: every branch is guarded on what the *tag* says, not only on what the binary
+  to be careful with: every branch is guarded on what the _tag_ says, not only on what the binary
   is. `--platform-tag` can put the two in contradiction, and a gloss drawn from the binary would
   then describe a wheel that does not exist. `PackageSpec.provenance` stays optional so a library
   caller assembling a spec by hand still renders a correct README, just a barer one.
-- `uv_build` is a direct runtime dependency of wheelbarrow so the default (non-`--isolated`) build
+- `uv_build` is a direct runtime dependency of wheelforge so the default (non-`--isolated`) build
   path can run the backend in-process instead of provisioning a venv. It is pinned to `>=0.11.30,<0.12`
   in both `pyproject.toml` and the generated `PYPROJECT` template; those pins must move together.
 - Publishing shells out to `uv publish`. The token is read from `UV_PUBLISH_TOKEN` by

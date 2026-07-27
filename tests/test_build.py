@@ -14,18 +14,18 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from wheelbarrow.builder import BuildResult, build_package, build_packages
-from wheelbarrow.errors import BuildError
-from wheelbarrow.probe import BinaryInfo, inspect_binary
-from wheelbarrow.scaffold import (
+from wheelforge.builder import BuildResult, build_package, build_packages
+from wheelforge.errors import BuildError
+from wheelforge.probe import BinaryInfo, inspect_binary
+from wheelforge.scaffold import (
     Launcher,
     PackageSpec,
     archive_executables,
     make_spec,
     staged_paths,
 )
-from wheelbarrow.tags import platform_tag
-from wheelbarrow.wheelfix import retag_wheel
+from wheelforge.tags import platform_tag
+from wheelforge.wheelfix import retag_wheel
 
 from .conftest import MUSL_INTERP, make_elf, make_pe
 
@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     from subprocess import CompletedProcess
     from typing import Any
 
-    from wheelbarrow.wheelfix import RetagResult
+    from wheelforge.wheelfix import RetagResult
 
 
 def build(

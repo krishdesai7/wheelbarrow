@@ -15,8 +15,8 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 
 import pytest
 
-from wheelbarrow import fetch
-from wheelbarrow.wheelfix import Mode
+from wheelforge import fetch
+from wheelforge.wheelfix import Mode
 
 if TYPE_CHECKING:
     from collections.abc import Callable

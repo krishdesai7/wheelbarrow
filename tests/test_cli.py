@@ -9,9 +9,9 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner, Result
 
-from wheelbarrow import cli
-from wheelbarrow.cli import app
-from wheelbarrow.pypi import NameStatus
+from wheelforge import cli
+from wheelforge.cli import app
+from wheelforge.pypi import NameStatus
 
 from .conftest import make_elf, make_pe
 
@@ -37,7 +37,7 @@ COMMANDS = ["fetch", "inspect", "build", "publish", "help"]
 
 def run(*args: str) -> Result:
     """Invoke the app under its installed name, so usage lines read correctly."""
-    return runner.invoke(app, list(args), prog_name="wheelbarrow")
+    return runner.invoke(app, list(args), prog_name="wheelforge")
 
 
 def everything_written(result: Result) -> str:
@@ -50,13 +50,13 @@ def plain_output(result: Result) -> str:
 
 
 class TestBareSubcommandShowsHelp:
-    """`wheelbarrow COMMAND` with no arguments behaves like the bare app."""
+    """`wheelforge COMMAND` with no arguments behaves like the bare app."""
 
     @pytest.mark.parametrize("command", ["fetch", "inspect", "build", "publish"])
     def test_no_arguments_prints_the_commands_help(self, command) -> None:
         result = run(command)
         rendered = plain_output(result)
-        assert f"Usage: wheelbarrow {command}" in rendered
+        assert f"Usage: wheelforge {command}" in rendered
         assert "--help" in rendered
 
     @pytest.mark.parametrize("command", ["fetch", "inspect", "build", "publish"])
@@ -67,7 +67,7 @@ class TestBareSubcommandShowsHelp:
 
 
 class TestHelpCommand:
-    """`wheelbarrow help COMMAND` is an alias for `COMMAND --help`."""
+    """`wheelforge help COMMAND` is an alias for `COMMAND --help`."""
 
     @pytest.mark.parametrize("command", COMMANDS)
     def test_matches_the_help_flag(self, command) -> None:
@@ -77,7 +77,7 @@ class TestHelpCommand:
     def test_usage_line_is_fully_qualified(self, command) -> None:
         # The sub-context is parented to the root, so the usage line names the
         # program too rather than starting at the subcommand.
-        assert f"Usage: wheelbarrow {command}" in plain_output(run("help", command))
+        assert f"Usage: wheelforge {command}" in plain_output(run("help", command))
 
     def test_without_an_argument_describes_the_app(self) -> None:
         assert run("help").output == run("--help").output
@@ -104,7 +104,7 @@ class TestNameCheck:
                 calls.append(name)
                 return status
 
-            monkeypatch.setattr("wheelbarrow.pypi.check_name", fake_check)
+            monkeypatch.setattr("wheelforge.pypi.check_name", fake_check)
             return run(
                 "build",
                 str(elf_binary),
@@ -380,7 +380,7 @@ class TestDirectoryInput:
         """Every wheel carries the same project name; one question suffices."""
         calls: list[str] = []
         monkeypatch.setattr(
-            "wheelbarrow.pypi.check_name",
+            "wheelforge.pypi.check_name",
             lambda name, **_kw: calls.append(name) or NameStatus.AVAILABLE,
         )
         result = run(
@@ -443,7 +443,7 @@ class TestUntaggableBinariesComeWithTheFix:
 
     def test_inspect_then_says_how_to_verify(self, with_bsd) -> None:
         rendered = plain_output(run("inspect", str(with_bsd)))
-        assert f"wheelbarrow inspect {with_bsd}" in rendered
+        assert f"wheelforge inspect {with_bsd}" in rendered
 
     def test_build_gives_the_same_removal(self, with_bsd, tmp_path) -> None:
         result = run(
@@ -503,12 +503,12 @@ class TestCommandsPointAtTheNextStep:
 
     def test_inspect_of_one_file_suggests_building_it(self, binary) -> None:
         rendered = plain_output(run("inspect", str(binary)))
-        assert f"wheelbarrow build {binary}" in rendered
+        assert f"wheelforge build {binary}" in rendered
 
     def test_inspect_of_a_clean_directory_suggests_building_it(self, binary) -> None:
         """The directory, not the first binary: a release is built as a batch."""
         rendered = plain_output(run("inspect", str(binary.parent)))
-        assert f"wheelbarrow build {binary.parent}" in rendered
+        assert f"wheelforge build {binary.parent}" in rendered
 
     def test_build_suggests_a_publish_dry_run(self, binary, tmp_path) -> None:
         result = run(
@@ -523,7 +523,7 @@ class TestCommandsPointAtTheNextStep:
             "--no-check-name",
         )
         rendered = plain_output(result)
-        assert "wheelbarrow publish" in rendered
+        assert "wheelforge publish" in rendered
         assert "--dry-run" in rendered
 
     def test_a_batch_build_suggests_publishing_all_of_them(self, tmp_path) -> None:
@@ -647,7 +647,7 @@ class TestFetchCommand:
             "fetch", "acme/tool", str(tmp_path), "-t", "v1.0.0", "-p", "*.tar.gz"
         )
         written = plain_output(result)
-        assert "wheelbarrow build" in written
+        assert "wheelforge build" in written
 
     def test_list_shows_the_assets_without_downloading(
         self, fake_http, tarball, tmp_path
@@ -790,7 +790,7 @@ class TestFetchHidesWhatItCannotUse:
 
     def test_list_suggests_the_download(self, fake_http, tarball, tmp_path) -> None:
         rendered = self.listed(fake_http, tarball, tmp_path)
-        assert "wheelbarrow fetch acme/tool" in rendered
+        assert "wheelforge fetch acme/tool" in rendered
 
     def test_the_suggestion_carries_the_patterns_through(
         self, fake_http, tarball, tmp_path

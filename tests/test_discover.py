@@ -2,8 +2,8 @@
 
 import pytest
 
-from wheelbarrow import discover
-from wheelbarrow.errors import InspectionError
+from wheelforge import discover
+from wheelforge.errors import InspectionError
 
 from .conftest import make_elf, make_macho
 

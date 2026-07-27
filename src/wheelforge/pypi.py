@@ -9,7 +9,7 @@ claimed again.
 Two things this deliberately does *not* do. It never decides whether a build
 should proceed: 200 only means the name exists, not that it belongs to someone
 else, and rebuilding a package you already own is the common case. And it never
-turns a network problem into a failure -- wheelbarrow builds offline, so an
+turns a network problem into a failure -- wheelforge builds offline, so an
 unreachable index yields `UNKNOWN` and the build carries on.
 """
 
@@ -55,7 +55,7 @@ def check_name(
     request = urllib.request.Request(  # ruff: ignore[suspicious-url-open-usage]
         url,
         method="HEAD",
-        headers={"User-Agent": f"wheelbarrow/{__version__}"},
+        headers={"User-Agent": f"wheelforge/{__version__}"},
     )
 
     try:

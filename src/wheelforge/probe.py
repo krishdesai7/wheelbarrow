@@ -2,7 +2,7 @@
 
 Wheels that embed a native executable must carry a platform tag. If they do not,
 package managers cannot determine if a given wheel can be installed on the current
-machine. Rather than assuming that the binary matches the machine running Wheelbarrow,
+machine. Rather than assuming that the binary matches the machine running Wheelforge,
 this module reads its headers directly. This enables cross-building.
 
 Only the header prefix of each format is parsed. This is enough to recover the CPU

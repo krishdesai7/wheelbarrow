@@ -1,6 +1,6 @@
 from importlib.metadata import PackageNotFoundError, version
 
 try:
-    __version__: str = version("wheelbarrow")
+    __version__: str = version("wheelforge")
 except PackageNotFoundError:
     __version__ = "0.1.0"

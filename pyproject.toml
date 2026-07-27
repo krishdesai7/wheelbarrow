@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 
 [project]
-name = "wheelbarrow"
+name = "wheelforge"
 description = "Convert OS binaries into PyPI-installable python wheels"
 readme = "README.md"
 version = "0.1.0"
@@ -24,11 +24,11 @@ dependencies = [
 ]
 
 [project.scripts]
-wheelbarrow = "wheelbarrow.cli:app"
+wheelforge = "wheelforge.cli:app"
 
 [build-backend]
 editable-profile = "dev"
-module-name = "wheelbarrow"
+module-name = "wheelforge"
 
 [dependency-groups]
 dev = [
@@ -43,9 +43,9 @@ release = [
 ]
 
 [project.urls]
-repository = "https://github.com/krishdesai7/wheelbarrow"
-Changelog = "https://github.com/krishdesai7/wheelbarrow/blob/main/CHANGELOG.md"
-Releases = "https://github.com/krishdesai7/wheelbarrow/releases"
+repository = "https://github.com/krishdesai7/wheelforge"
+Changelog = "https://github.com/krishdesai7/wheelforge/blob/main/CHANGELOG.md"
+Releases = "https://github.com/krishdesai7/wheelforge/releases"
 
 [tool.rooster]
 changelog-contributors = false

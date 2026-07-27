@@ -8,7 +8,7 @@ exactly like success -- an unverified download, and a pattern that quietly
 matched nothing.
 
 Talking to the API directly rather than shelling out to `gh` keeps
-`uvx wheelbarrow` self-contained: a public release needs no credentials at all.
+`uvx wheelforge` self-contained: a public release needs no credentials at all.
 A token is read from `GH_TOKEN` or `GITHUB_TOKEN` when one is set, for private
 repositories and for the larger rate limit. As with the publish token, there is
 deliberately no option for it, so it cannot reach a shell history.
@@ -117,7 +117,7 @@ INSTALLER_SUFFIXES: Final[tuple[str, ...]] = (
 )
 
 #: Signatures and attestations. They describe a payload rather than being one,
-#: and wheelbarrow does not verify signatures -- only digests.
+#: and wheelforge does not verify signatures -- only digests.
 SIGNATURE_SUFFIXES: Final[tuple[str, ...]] = (
     ".sig",
     ".asc",
@@ -250,11 +250,11 @@ def unpackable_reason(name: str) -> str | None:
     executable is exactly what `build` wants, and a whitelist would drop it.
 
     Phrased as a plural noun so it reads both as a count (`3 installers
-    wheelbarrow cannot unpack`) and as the reason a pattern matched nothing.
+    wheelforge cannot unpack`) and as the reason a pattern matched nothing.
     """
     lowered: str = name.lower()
     if lowered.endswith(INSTALLER_SUFFIXES):
-        return "installers wheelbarrow cannot unpack"
+        return "installers wheelforge cannot unpack"
     if lowered.endswith(SIGNATURE_SUFFIXES):
         return "signatures and attestations, which are not payloads"
     if lowered.endswith(DOC_SUFFIXES):
@@ -399,7 +399,7 @@ class _StripAuthOnRedirect(urllib.request.HTTPRedirectHandler):
 def _request(url: str, *, token: str | None, accept: str) -> urllib.request.Request:
     headers: dict[str, str] = {
         "Accept": accept,
-        "User-Agent": f"wheelbarrow/{__version__}",
+        "User-Agent": f"wheelforge/{__version__}",
         "X-GitHub-Api-Version": "2022-11-28",
     }
     if token:
@@ -532,7 +532,7 @@ def _filtered_detail(release: Release, pattern: str) -> str:
     """Explain a pattern that matched only assets `select_assets` filters out.
 
     Without this the message reads as though the release does not publish the
-    file at all, when in fact it does and wheelbarrow declined it -- which
+    file at all, when in fact it does and wheelforge declined it -- which
     sends the reader looking for a naming change that never happened.
     """
     swept: list[Asset] = [a for a in release.assets if fnmatch.fnmatch(a.name, pattern)]

@@ -189,7 +189,7 @@ def _is_pure(tag: str) -> bool:
 
     Only the platform component of the compatibility tag is consulted, and it
     may be a dot-separated set. A wheel is pure exactly when every platform it
-    advertises is `any`, which for wheelbarrow means the packaged executable is
+    advertises is `any`, which for wheelforge means the packaged executable is
     a script rather than machine code.
     """
     platform: str = tag.rsplit("-", 1)[-1]

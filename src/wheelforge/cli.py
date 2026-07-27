@@ -1,4 +1,4 @@
-"""Command line interface for wheelbarrow."""
+"""Command line interface for wheelforge."""
 
 import shlex
 from collections import defaultdict
@@ -18,7 +18,7 @@ from rich.table import Table
 
 from . import __version__, discover, fetch, pypi
 from .builder import BuildResult, build_packages
-from .errors import WheelbarrowError
+from .errors import WheelforgeError
 from .publish import PublishPlan, plan_publish, resolve_token, run_publish
 from .pypi import NameStatus
 from .scaffold import (
@@ -68,7 +68,7 @@ def _quote(part: str) -> str:
     `shlex.quote` is not usable directly: it would wrap `dist/*.whl` in quotes
     and stop the shell expanding the glob these suggestions rely on, and turn
     a `<name>` placeholder into unreadable noise. Only whitespace and quote
-    characters actually need escaping in a path wheelbarrow prints back.
+    characters actually need escaping in a path wheelforge prints back.
     """
     if part and not set(part) & set(" \t\n'\"\\"):
         return part
@@ -90,7 +90,7 @@ def _show_help(ctx: _Helpable) -> None:
     """Print the help for `ctx`'s command, exactly as `--help` would.
 
     This mirrors click's own `--help` handler rather than improving on it, so
-    `wheelbarrow help build` and `wheelbarrow build --help` cannot drift apart.
+    `wheelforge help build` and `wheelforge build --help` cannot drift apart.
     Under rich markup mode `get_help` renders straight to stdout and returns an
     empty string, and echoing that is what yields the trailing blank line
     `--help` also prints; the return value only carries text in the plain
@@ -102,7 +102,7 @@ def _show_help(ctx: _Helpable) -> None:
 
 def _version_callback(value: bool) -> None:
     if value:
-        console.print(f"wheelbarrow {__version__}")
+        console.print(f"wheelforge {__version__}")
         raise typer.Exit()
 
 
@@ -115,7 +115,7 @@ def root(
             "-v",
             callback=_version_callback,
             is_eager=True,
-            help="Show the wheelbarrow version and exit.",
+            help="Show the wheelforge version and exit.",
         ),
     ] = False,
 ) -> None:
@@ -141,7 +141,7 @@ def fetch_command(
             "--pattern",
             "-p",
             help="Glob of asset names to download, e.g. `*-apple-darwin.tar.gz`. "
-            "Repeatable. When omitted, every asset wheelbarrow can build from is "
+            "Repeatable. When omitted, every asset wheelforge can build from is "
             "downloaded -- installers, signatures and checksum files are "
             "always skipped.",
         ),
@@ -180,12 +180,12 @@ def fetch_command(
 
     Example:
 
-        wheelbarrow fetch starship/starship ~/starship -t v1.26.0 -p '*-musl.tar.gz'
+        wheelforge fetch starship/starship ~/starship -t v1.26.0 -p '*-musl.tar.gz'
     """
     try:
         release: fetch.Release = _resolve_release(source, tag, timeout=timeout)
         chosen: list[fetch.Asset] = fetch.select_assets(release, list(pattern or ()))
-    except WheelbarrowError as exc:
+    except WheelforgeError as exc:
         raise _fail(str(exc)) from exc
 
     console.print(
@@ -198,7 +198,7 @@ def fetch_command(
         if chosen:
             _suggest(
                 "download them",
-                "wheelbarrow",
+                "wheelforge",
                 "fetch",
                 source,
                 dest if dest != Path() else Path(release.repo),
@@ -215,7 +215,7 @@ def fetch_command(
             allow_unverified=allow_unverified,
             timeout=timeout,
         )
-    except WheelbarrowError as exc:
+    except WheelforgeError as exc:
         raise _fail(str(exc)) from exc
 
     _report_fetched(results, dest)
@@ -229,7 +229,7 @@ def _resolve_release(source: str, tag: str | None, *, timeout: float) -> fetch.R
     owner, repo, from_url = fetch.parse_source(source)
 
     if tag and from_url and tag != from_url:
-        raise WheelbarrowError(
+        raise WheelforgeError(
             f"{source} names release {from_url}, but --tag says {tag}. "
             f"Drop one of them."
         )
@@ -245,7 +245,7 @@ def _print_assets(release: fetch.Release, chosen: list[fetch.Asset]) -> None:
     Assets nothing downstream can open -- installers, signatures, checksum
     files -- are left out rather than listed and declined later. Their count is
     still reported, so a release that publishes only `.msi` files reads as
-    "wheelbarrow cannot use these" instead of "this release is empty".
+    "wheelforge cannot use these" instead of "this release is empty".
     """
     selected: set[str] = {a.name for a in chosen}
     table = Table(box=None, pad_edge=False)
@@ -355,11 +355,11 @@ def _report_fetched(results: list[fetch.FetchedAsset], dest: Path) -> None:
     if len(executables) > 1:
         # Point at the directory rather than the first binary: a release is a
         # batch, and `build <dir>` is the command that packages all of it.
-        _suggest("check what they are", "wheelbarrow", "inspect", dest)
+        _suggest("check what they are", "wheelforge", "inspect", dest)
     elif executables:
         _suggest(
             "build it",
-            "wheelbarrow",
+            "wheelforge",
             "build",
             executables[0],
             "-n",
@@ -391,22 +391,22 @@ def inspect_command(
 
     Given a directory it reports every executable beneath it, one row each, and
     passes over anything that is not one -- so it can be pointed straight at
-    what `wheelbarrow fetch` leaves behind.
+    what `wheelforge fetch` leaves behind.
     """
     try:
         found: discover.Discovery = discover.collect(path)
-    except WheelbarrowError as exc:
+    except WheelforgeError as exc:
         raise _fail(str(exc)) from exc
 
     if found.is_single:
         candidate: discover.Candidate = found.candidates[0]
         try:
             tag: str = platform_tag(candidate.info, glibc_version=glibc)
-        except WheelbarrowError as exc:
+        except WheelforgeError as exc:
             raise _fail(str(exc)) from exc
         _print_info(candidate.info, tag)
         _suggest(
-            "build it", "wheelbarrow", "build", path, "-n", "<name>", "-V", "<version>"
+            "build it", "wheelforge", "build", path, "-n", "<name>", "-V", "<version>"
         )
         return
 
@@ -434,7 +434,7 @@ def _print_inventory(
         relative: str = str(candidate.path.relative_to(root))
         try:
             tag: str = platform_tag(candidate.info, glibc_version=glibc)
-        except WheelbarrowError as exc:
+        except WheelforgeError as exc:
             tag = "[yellow]-[/]"
             reasons.append(f"{relative}: {exc}")
             untaggable.append(candidate.path)
@@ -453,12 +453,12 @@ def _print_inventory(
 
     if untaggable:
         console.print(f"[dim]{_removal_advice(root, untaggable)}[/]")
-        _suggest("then confirm the directory is clean", "wheelbarrow", "inspect", root)
+        _suggest("then confirm the directory is clean", "wheelforge", "inspect", root)
         return
 
     _suggest(
         "build the whole directory",
-        "wheelbarrow",
+        "wheelforge",
         "build",
         root,
         "-n",
@@ -663,7 +663,7 @@ def build_command(
 
     Example:
 
-        wheelbarrow build <path-to-binary> -n <binary-name> -V <version> -a <alias>
+        wheelforge build <path-to-binary> -n <binary-name> -V <version> -a <alias>
     """
     aliases: list[str] | None = list(alias) if alias else None
     try:
@@ -721,7 +721,7 @@ def build_command(
             overwrite=overwrite,
             on_built=_report_built if len(plans) > 1 else None,
         )
-    except WheelbarrowError as exc:
+    except WheelforgeError as exc:
         raise _fail(str(exc)) from exc
 
     if len(results) > 1:
@@ -756,7 +756,7 @@ def _suggest_publish(output: Path, wheels: list[Path]) -> None:
     target: str = str(wheels[0]) if len(wheels) == 1 else str(output / "*.whl")
     _suggest(
         "check what would be uploaded",
-        "wheelbarrow",
+        "wheelforge",
         "publish",
         target,
         "--dry-run",
@@ -790,7 +790,7 @@ def _plan_builds(
     """
     candidates: tuple[discover.Candidate, ...] = found.candidates
     if override and len(candidates) > 1:
-        raise WheelbarrowError(
+        raise WheelforgeError(
             f"--platform-tag names one tag, but {len(candidates)} executables "
             f"were found in the directory; they would all claim it and "
             f"overwrite one another. Build them one at a time to override a tag."
@@ -809,7 +809,7 @@ def _plan_builds(
                 macos_min=_parse_macos_min(macos_min),
                 universal2=universal2,
             )
-        except WheelbarrowError as exc:
+        except WheelforgeError as exc:
             if found.is_single:
                 raise  # one input, one question: answer it exactly as before
             failures.append(f"    {candidate.path}: {exc}")
@@ -831,10 +831,10 @@ def _plan_builds(
 
     if failures:
         listed: str = "\n".join(failures)
-        raise WheelbarrowError(
+        raise WheelforgeError(
             f"no wheel tag could be determined for these executables:\n{listed}\n"
             f"{_removal_advice(root, untaggable)}\n"
-            f"Then re-run `wheelbarrow inspect {root}` to verify, or build the "
+            f"Then re-run `wheelforge inspect {root}` to verify, or build the "
             f"rest by pointing at a directory that excludes them."
         )
 
@@ -857,7 +857,7 @@ def _refuse_mixed_names(
     if len(names) == 1:
         return
     listed: str = ", ".join(sorted(names))
-    raise WheelbarrowError(
+    raise WheelforgeError(
         f"the executables are not all named the same ({listed}), so each wheel "
         f"would expose a different command and the installed name would depend "
         f"on the platform. Pass --alias to give them all one name."
@@ -930,7 +930,7 @@ def _parse_macos_min(value: str | None) -> tuple[int, int] | None:
         major = int(parts[0])
         minor: int = int(parts[1]) if len(parts) > 1 else 0
     except (ValueError, IndexError) as exc:
-        raise WheelbarrowError(
+        raise WheelforgeError(
             f"--macos-min expects a version like `12.0`, got {value!r}"
         ) from exc
     return major, minor
@@ -972,7 +972,7 @@ def publish_command(
     no CLI option for it, to protect against leaking it into shell history.
 
     Publishing is permanent: PyPI does not allow re-uploading a version that
-    has already been released, so wheelbarrow asks for confirmation first.
+    has already been released, so wheelforge asks for confirmation first.
     """
     try:
         plan: PublishPlan = plan_publish(
@@ -985,7 +985,7 @@ def publish_command(
             # Checked up front so a missing token is reported before the user
             # is asked to confirm, rather than after they commit to the upload.
             resolve_token()
-    except WheelbarrowError as exc:
+    except WheelforgeError as exc:
         raise _fail(str(exc)) from exc
 
     target: str = publish_url or index or "PyPI"
@@ -1012,7 +1012,7 @@ def publish_command(
 
     try:
         run_publish(plan)
-    except WheelbarrowError as exc:
+    except WheelforgeError as exc:
         raise _fail(str(exc)) from exc
 
     console.print("[bold green]published[/]")
@@ -1033,7 +1033,7 @@ def _invocation_without_dry_run(
     the upload goes are exactly the ones worth not retyping from memory when
     the next run is the irreversible one.
     """
-    command: list[str] = ["wheelbarrow", "publish", *_as_glob(wheels)]
+    command: list[str] = ["wheelforge", "publish", *_as_glob(wheels)]
     for option, value in (
         ("--index", index),
         ("--publish-url", publish_url),
@@ -1073,7 +1073,7 @@ def help_command(
     ctx: typer.Context,
     command: Annotated[
         str | None,
-        typer.Argument(help="Command to describe. Omitted, describes wheelbarrow."),
+        typer.Argument(help="Command to describe. Omitted, describes wheelforge."),
     ] = None,
 ) -> None:
     """Show help for a command, equivalent to `COMMAND --help`."""
@@ -1092,7 +1092,7 @@ def help_command(
         raise _fail(f"unknown command {command!r}. Available commands: {known}")
 
     # Parenting the context to the root keeps the usage line fully qualified,
-    # so it reads `wheelbarrow build ...` rather than just `build ...`.
+    # so it reads `wheelforge build ...` rather than just `build ...`.
     _show_help(typer.Context(subcommand, info_name=command, parent=root_ctx))
 
 

@@ -17,9 +17,9 @@ from typing import TYPE_CHECKING, Any, Final
 
 import pytest
 
-from wheelbarrow import discover, fetch
-from wheelbarrow.errors import FetchError
-from wheelbarrow.fetch import Asset, Release
+from wheelforge import discover, fetch
+from wheelforge.errors import FetchError
+from wheelforge.fetch import Asset, Release
 
 if TYPE_CHECKING:
     from pathlib import Path
