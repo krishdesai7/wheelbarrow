@@ -127,8 +127,9 @@ Detected platforms map to tags as follows.
 
 | Binary                         | Tag                                 | Description           |
 | ------------------------------ | ----------------------------------- | --------------------- |
-| ELF, glibc or static           | `manylinux_2_17_<arch>`             | Linux (glibc)         |
-| ELF, musl                      | `musllinux_1_2_<arch>`              | Linux (musl)          |
+| ELF, dynamic glibc             | `manylinux_<measured>_<arch>`       | Linux (glibc)         |
+| ELF, dynamic musl              | `musllinux_1_2_<arch>`              | Linux (musl)          |
+| ELF, static                    | `manylinux_…_<arch>.musllinux_…`    | Linux (either libc)   |
 | Mach-O arm64                   | `macosx_11_0_arm64`                 | macOS (Apple Silicon) |
 | Mach-O x86_64                  | `macosx_10_12_x86_64`               | macOS (Intel)         |
 | Mach-O universal (both slices) | `macosx_<min>_0_universal2`         | macOS (Universal)     |
@@ -146,6 +147,34 @@ anyway.
 ```
 
 The macOS minimum comes from the binary's `LC_BUILD_VERSION` when present. It can be overridden with `--glibc 2.28`, `--macos-min 12.0`, or replaced entirely with `--platform-tag manylinux_2_28_aarch64`.
+
+### Static binaries claim both libc families
+
+A platform tag says where an installer may *place* a wheel, not merely where the code can run. pip on Alpine accepts only `musllinux_*` tags, so tagging a statically linked binary `manylinux` alone withholds it from exactly the systems a static build exists to serve — while tagging it `musllinux` alone abandons every glibc user on architectures that ship no glibc build.
+
+Neither is true, so wheelbarrow emits both, as a PEP 425 compressed tag set:
+
+```
+py_starship-1.26.0-py3-none-manylinux_2_17_x86_64.musllinux_1_2_x86_64.whl
+```
+
+One wheel, honestly installable under either libc. The file name compresses the set; `WHEEL` gets the expanded form, one `Tag:` per line, as the spec requires.
+
+### The glibc floor is measured, not assumed
+
+For a *dynamically* linked glibc binary the manylinux baseline is read out of `.gnu.version_r` — the highest `GLIBC_x.y` symbol version the binary imports:
+
+```zsh
+$ wheelbarrow inspect ./starship-x86_64-unknown-linux-gnu
+...
+libc         glibc
+glibc min    2.18
+wheel tag    py3-none-manylinux_2_18_x86_64
+```
+
+This matters more than one version's difference suggests: RHEL and CentOS 7 ship glibc *exactly* 2.17, so a default `manylinux_2_17` tag on a binary needing 2.18 installs there and then dies with `version GLIBC_2.18 not found`.
+
+A measurement can only raise the floor, never lower it. A binary importing nothing newer than 2.5 is not evidence that it runs on a 2.5 system, so the per-architecture default stays a lower bound. `--glibc` overrides both.
 
 ## Shell scripts
 

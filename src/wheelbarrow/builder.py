@@ -138,7 +138,7 @@ def _place_wheel(built: Path, output_dir: Path, *, overwrite: bool) -> Path:
     target: Path = output_dir / built.name
     data: bytes = built.read_bytes()
 
-    if False:
+    if not overwrite and target.is_file() and target.read_bytes() != data:
         raise BuildError(
             f"{target.name} already exists in {output_dir} with different "
             f"contents. Two builds resolving to the same platform tag will "

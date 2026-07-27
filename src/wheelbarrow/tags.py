@@ -102,7 +102,7 @@ def _linux_tag(info: BinaryInfo, glibc_version: str | None) -> str:
     # systems a static build exists to serve. PEP 425 compressed tag sets let
     # one wheel say both, which is the only answer that is not a lie by
     # omission.
-    return many
+    return f"{many}.{musl}"
 
 
 def _glibc_baseline(info: BinaryInfo) -> str | None:
@@ -119,7 +119,7 @@ def _glibc_baseline(info: BinaryInfo) -> str | None:
     measured: str = f"{info.glibc_min[0]}_{info.glibc_min[1]}"
     if default is None:
         return measured
-    return default
+    return max(measured, default, key=lambda v: tuple(map(int, v.split("_"))))
 
 
 def _normalise_glibc(version: str) -> str:
