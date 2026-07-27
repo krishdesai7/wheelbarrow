@@ -308,6 +308,7 @@ wheelbarrow build BINARY --name NAME --version VERSION
         --universal2          tag a fat Mach-O for both architectures
         --launcher MODE       direct (default) or shim
         --keep-project DIR    keep the generated project for inspection
+        --overwrite           replace an existing wheel of the same name
         --isolated            build in an isolated PEP 517 environment
         --no-check-name       skip the PyPI name lookup (see below)
     -v, --verbose             show build backend output
