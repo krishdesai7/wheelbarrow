@@ -105,6 +105,21 @@ class TestWindows:
         assert platform_tag(windows(arch)) == expected
 
 
+class TestUntaggableSystems:
+    """Wheel tags exist for Linux, macOS and Windows. Nothing else."""
+
+    @pytest.mark.parametrize("system", ["freebsd", "netbsd", "openbsd", "solaris"])
+    def test_refused_rather_than_passed_off_as_linux(self, system) -> None:
+        info = BinaryInfo(path=Path(), format="elf", os=system, arch="x86_64")
+        with pytest.raises(InspectionError, match="no wheel platform tag exists"):
+            platform_tag(info)
+
+    def test_the_error_points_at_the_way_out(self) -> None:
+        info = BinaryInfo(path=Path(), format="elf", os="freebsd", arch="x86_64")
+        with pytest.raises(InspectionError, match="--platform-tag"):
+            platform_tag(info)
+
+
 class TestScript:
     def test_a_script_gets_the_any_tag(self) -> None:
         assert platform_tag(script()) == "any"

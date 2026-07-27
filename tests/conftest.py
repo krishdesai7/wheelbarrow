@@ -28,11 +28,15 @@ def make_elf(
     bits: int = 64,
     little: bool = True,
     interp: bytes | None = GLIBC_INTERP,
+    osabi: int = 0,
 ) -> bytes:
-    """Assemble a minimal but well-formed ELF image."""
+    """Assemble a minimal but well-formed ELF image.
+
+    `osabi` is `EI_OSABI`; 0 is what Linux toolchains emit, and 9 is FreeBSD.
+    """
     endian: Literal["<", ">"] = "<" if little else ">"
     ei_class: Literal[1, 2] = 2 if bits == 0x40 else 1
-    ident = bytes([0x7F, 0x45, 0x4C, 0x46, ei_class, 1 if little else 2, 1, 0])
+    ident = bytes([0x7F, 0x45, 0x4C, 0x46, ei_class, 1 if little else 2, 1, osabi])
     ident += b"\x00" * 8
 
     if bits == 0x40:

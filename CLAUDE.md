@@ -42,6 +42,12 @@ raising, so builds keep working offline, and a `TAKEN` name is a warning, never 
 cannot distinguish your own project from someone else's). Tests stub `urlopen`; never let the
 suite make a real request.
 
+ELF does not imply Linux. `_parse_elf` reads `EI_OSABI` (byte 7) and maps it through `ELF_OSABI`;
+only 0 (SysV) and 3 (GNU) are Linux, and 0 is what Linux toolchains actually emit, so that byte can
+rule Linux out but never confirm it. `tags.platform_tag` then refuses anything else by name, because
+Python packaging has no tag for the BSDs and a silent `manylinux` tag on a FreeBSD binary is the
+worst possible outcome. An unrecognised OSABI is refused rather than assumed.
+
 Not every input is machine code. `probe.py` reports a `#!` file as `format="script"`, `os="any"`,
 `arch="any"` plus the shebang line, and `tags.platform_tag` maps that to `any`. That is deliberately
 broader than the truth — a `py3-none-any` wheel installs on Windows too — because no wheel tag can
@@ -76,8 +82,12 @@ touching one, check all of:
   direct must *locate* the installed file, checking paths beside the package before `sysconfig`
   (which describes the running interpreter, and is wrong under `pip install --target`).
 
-`PackageSpec.installed_name` encodes the consequence: in direct mode the staged file *becomes* the
-command, so it is named after the first alias, not after the source file.
+`PackageSpec.installed_names` encodes the consequence, and is the single source of truth that
+`staged_paths` and `archive_executables` both derive from — change it and they follow. In direct
+mode the staged file *becomes* the command, so it is named after each alias rather than the source
+file, except that a `WINDOWS_EXEC_SUFFIXES` extension is carried over: `Scripts\starship` without
+the `.exe` is a file Windows will not execute, while a `.sh` on `PATH` is only noise, so the rule
+is deliberately narrow rather than "keep the suffix".
 
 ### Conventions
 

@@ -113,6 +113,40 @@ class TestPe:
             inspect_binary(path)
 
 
+class TestElfOsAbi:
+    """ELF is not a Linux format; `EI_OSABI` is what tells the systems apart."""
+
+    @pytest.mark.parametrize("osabi", [0x00, 0x03])
+    def test_sysv_and_gnu_both_mean_linux(self, write_binary, osabi) -> None:
+        """Linux toolchains emit 0 far more often than 3."""
+        path = write_binary("tool", make_elf(0x3E, osabi=osabi))
+        assert inspect_binary(path).os == "linux"
+
+    @pytest.mark.parametrize(
+        ("osabi", "expected"),
+        [(0x09, "freebsd"), (0x02, "netbsd"), (0x0C, "openbsd"), (0x06, "solaris")],
+    )
+    def test_other_systems_are_named_not_assumed_to_be_linux(
+        self, write_binary, osabi, expected
+    ) -> None:
+        path = write_binary("tool", make_elf(0x3E, osabi=osabi))
+        info = inspect_binary(path)
+        assert info.os == expected
+        assert info.arch == "x86_64", "the architecture is still readable"
+
+    def test_libc_is_not_reported_for_a_non_linux_elf(self, write_binary) -> None:
+        """The interpreter names that system's own loader, not a libc flavour."""
+        path = write_binary("tool", make_elf(0x3E, osabi=0x09, interp=GLIBC_INTERP))
+        assert inspect_binary(path).libc is None
+
+    def test_an_unknown_osabi_is_refused_rather_than_guessed(
+        self, write_binary
+    ) -> None:
+        path = write_binary("tool", make_elf(0x3E, osabi=0x42))
+        with pytest.raises(InspectionError, match="unrecognised ELF OS ABI 0x42"):
+            inspect_binary(path)
+
+
 class TestScript:
     """A `#!` file is source text, so there is no architecture to detect."""
 

@@ -134,6 +134,16 @@ Detected platforms map to tags as follows.
 | Mach-O universal (both slices) | `macosx_<min>_0_universal2`         | macOS (Universal)     |
 | PE amd64 / arm64 / i386        | `win_amd64` / `win_arm64` / `win32` | Windows (PE/COFF)     |
 | `#!` script                    | `any`                               | Any (no machine code) |
+| ELF, non-Linux `EI_OSABI`      | _refused_                           | FreeBSD, NetBSD, …    |
+
+ELF is not a Linux format. FreeBSD, NetBSD, OpenBSD and Solaris binaries are ELF too, and are identical to Linux ones in machine and libc; only `EI_OSABI` tells them apart. Python packaging defines no tag for those systems, so wheelbarrow names the system and refuses rather than passing a FreeBSD binary off as `manylinux`:
+
+```zsh
+$ wheelbarrow inspect ./starship-x86_64-unknown-freebsd
+error: no wheel platform tag exists for freebsd; Python packaging defines tags
+for Linux, macOS and Windows only. Pass --platform-tag explicitly to package it
+anyway.
+```
 
 The macOS minimum comes from the binary's `LC_BUILD_VERSION` when present. It can be overridden with `--glibc 2.28`, `--macos-min 12.0`, or replaced entirely with `--platform-tag manylinux_2_28_aarch64`.
 
@@ -218,6 +228,8 @@ Two launchers are available via `--launcher`. Both keep `binary_path()` and `pyt
 The binary is mapped into the wheel's `.data/scripts/` directory, so installers place the real executable straight onto `PATH`. No Python runs on invocation, and the installed command is indistinguishable from the binary itself.
 
 There is deliberately no `[project.scripts]` entry in this mode: a console script of the same name is written to the same directory and would silently overwrite the binary at install time.
+
+Because the staged file is renamed after its alias, a Windows executable suffix is carried across: `starship.exe` with the default alias installs as `Scripts\starship.exe`, not `Scripts\starship`, which Windows would refuse to run. The alias itself is unaffected — the command is still `starship`. Only `PATHEXT` suffixes (`.exe`, `.com`, `.bat`, `.cmd`) are kept; `.sh` and the like are dropped, since on POSIX an extension on a command name is just noise.
 
 ### `shim`
 

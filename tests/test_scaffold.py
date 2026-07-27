@@ -244,6 +244,60 @@ class TestDirectLauncher:
         assert beside < via_sysconfig
 
 
+class TestWindowsSuffix:
+    """Direct mode renames the staged file, and Windows reads the suffix.
+
+    A `starship.exe` installed as `Scripts\\starship` is a file Windows will
+    not execute, so `.exe` has to survive being renamed after the alias.
+    """
+
+    def test_exe_survives_the_rename(self) -> None:
+        s = spec(binary_name="starship.exe", platform_tag="win_amd64")
+        assert s.installed_name == "starship.exe"
+
+    def test_the_alias_itself_is_unchanged(self) -> None:
+        """The suffix is on the file; the command is still `starship`."""
+        s = spec(binary_name="starship.exe", platform_tag="win_amd64")
+        assert s.aliases == ["starship"]
+
+    @pytest.mark.parametrize("suffix", [".exe", ".EXE", ".com", ".bat", ".cmd"])
+    def test_every_pathext_suffix_is_kept(self, suffix) -> None:
+        s = spec(binary_name=f"tool{suffix}", platform_tag="win_amd64")
+        assert s.installed_name == f"tool{suffix}"
+
+    @pytest.mark.parametrize("suffix", [".sh", ".py", ".bin", ".v10"])
+    def test_other_suffixes_are_still_dropped(self, suffix) -> None:
+        """On POSIX an extension on a command name is noise, not meaning."""
+        s = spec(binary_name=f"tool{suffix}", platform_tag="any")
+        assert s.installed_name == "tool"
+
+    def test_an_explicit_alias_does_not_gain_a_second_suffix(self) -> None:
+        s = spec(binary_name="starship.exe", aliases=["starship.exe"])
+        assert s.installed_name == "starship.exe"
+
+    def test_every_alias_gets_the_suffix(self) -> None:
+        s = spec(binary_name="tool.exe", aliases=["tool", "othertool"])
+        assert s.installed_names == ["tool.exe", "othertool.exe"]
+        assert archive_executables(s) == {
+            "wheelbarrow_bin-15.2.0.data/scripts/tool.exe",
+            "wheelbarrow_bin-15.2.0.data/scripts/othertool.exe",
+        }
+
+    def test_shim_mode_is_untouched(self) -> None:
+        """There the file keeps its own name inside the package regardless."""
+        s = spec(binary_name="tool.exe", launcher=Launcher.SHIM)
+        assert s.installed_names == ["tool.exe"]
+
+    def test_the_locator_looks_for_the_installed_name(
+        self, tmp_path, elf_binary
+    ) -> None:
+        """`binary_path()` must agree with what was actually installed."""
+        root, s = build_project(tmp_path, elf_binary, binary_name="tool.exe")
+        source = (root / "src" / s.module / "__init__.py").read_text()
+        assert 'BINARY_NAME = "tool.exe"' in source
+        assert (root / SCRIPTS_DIR / "tool.exe").is_file()
+
+
 class TestShimLauncher:
     @pytest.fixture
     def project(self, tmp_path, elf_binary) -> tuple[Path, PackageSpec]:

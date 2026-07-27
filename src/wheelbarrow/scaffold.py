@@ -55,6 +55,15 @@ from .templates import (
 #: `.data/scripts/`. Deliberately outside `src/` so it is not package data.
 SCRIPTS_DIR: Final[str] = "scripts"
 
+#: Suffixes Windows requires in order to treat a file on `PATH` as executable
+#: (its `PATHEXT`). Direct mode renames the staged file after its alias, and
+#: dropping `.exe` there would install something Windows refuses to run. Every
+#: other suffix is still dropped: `.sh` and `.py` carry no such meaning, and on
+#: POSIX an extension on a command name is just noise.
+WINDOWS_EXEC_SUFFIXES: Final[frozenset[str]] = frozenset(
+    {".exe", ".com", ".bat", ".cmd"}
+)
+
 
 class Launcher(StrEnum):
     """How the packaged binary is exposed on `PATH`."""
@@ -86,15 +95,31 @@ class PackageSpec:
     urls: dict[str, str] = field(default_factory=dict)
 
     @property
-    def installed_name(self) -> str:
-        """File name the executable carries once installed.
+    def installed_names(self) -> list[str]:
+        """File names the executable carries once installed.
 
-        In shim mode it keeps its original name inside the package. In direct
-        mode it *becomes* the command, so it is named after the first alias.
+        In shim mode it keeps its original name inside the package, so there is
+        one, whatever the aliases. In direct mode the staged file *becomes* the
+        command, so there is one per alias, named after it -- except that a
+        Windows executable suffix is carried over, because a `starship.exe`
+        installed as `Scripts\\starship` is a file Windows will not run.
         """
         if self.launcher is Launcher.SHIM:
-            return self.binary_name
-        return self.aliases[0]
+            return [self.binary_name]
+
+        suffix: str = Path(self.binary_name).suffix
+        if suffix.lower() not in WINDOWS_EXEC_SUFFIXES:
+            suffix = ""
+        # An alias that already spells the suffix out must not gain a second.
+        return [
+            alias if alias.lower().endswith(suffix.lower()) else alias + suffix
+            for alias in self.aliases
+        ]
+
+    @property
+    def installed_name(self) -> str:
+        """File name behind the first alias, which the templates refer to."""
+        return self.installed_names[0]
 
 
 _ALIAS_RE: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9._-]+")
@@ -219,7 +244,7 @@ def staged_paths(spec: PackageSpec, root: Path) -> list[Path]:
     root = Path(root)
     if spec.launcher is Launcher.SHIM:
         return [root / "src" / spec.module / "bin" / spec.binary_name]
-    return [root / SCRIPTS_DIR / alias for alias in spec.aliases]
+    return [root / SCRIPTS_DIR / name for name in spec.installed_names]
 
 
 def archive_executables(spec: PackageSpec) -> set[str]:
@@ -227,7 +252,7 @@ def archive_executables(spec: PackageSpec) -> set[str]:
     if spec.launcher is Launcher.SHIM:
         return {f"{spec.module}/bin/{spec.binary_name}"}
     data_dir = f"{spec.dist_name.replace('-', '_')}-{spec.version}.data/scripts"
-    return {f"{data_dir}/{alias}" for alias in spec.aliases}
+    return {f"{data_dir}/{name}" for name in spec.installed_names}
 
 
 def stage_binary(source: Path, destination: Path) -> Path:

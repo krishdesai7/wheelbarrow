@@ -43,6 +43,24 @@ MACHO_MAGICS: Final[dict[int, tuple[bytes, Literal["<", ">"]]]] = {
 FAT_MAGIC: Final[int] = 0xCAFEBABE
 FAT_MAGIC_64: Final[int] = 0xCAFEBABF
 
+# ELF EI_OSABI -> operating system. ELF is not a Linux format: FreeBSD, NetBSD,
+# OpenBSD and Solaris all use it, and their binaries are indistinguishable from
+# Linux ones by machine and libc alone. Note that 0 (SysV) and 3 (GNU) both mean
+# Linux here: Linux toolchains overwhelmingly emit 0, so this byte can rule
+# Linux out but never confirm it.
+ELF_OSABI: Final[dict[int, str]] = {
+    0x00: "linux",
+    0x01: "hpux",
+    0x02: "netbsd",
+    0x03: "linux",
+    0x06: "solaris",
+    0x07: "aix",
+    0x08: "irix",
+    0x09: "freebsd",
+    0x0A: "tru64",
+    0x0C: "openbsd",
+}
+
 # ELF e_machine -> normalised architecture name.
 ELF_MACHINES: Final[dict[int, str]] = {
     0x03: "i686",
@@ -182,9 +200,17 @@ def _parse_elf(path: Path, head: bytes) -> BinaryInfo:
 
     ei_class: int = head[0x04]  # 1 = 32-bit, 2 = 64-bit
     ei_data: int = head[0x05]  # 1 = little endian, 2 = big endian
+    ei_osabi: int = head[0x07]
     if ei_class not in (1, 2):
         raise InspectionError(f"{path}: invalid ELF class {ei_class}")
     endian: Literal["<", ">"] = "<" if ei_data == 1 else ">"
+
+    os_name: str | None = ELF_OSABI.get(ei_osabi)
+    if os_name is None:
+        raise InspectionError(
+            f"{path}: unrecognised ELF OS ABI 0x{ei_osabi:x}. "
+            f"Pass --platform-tag to override detection."
+        )
 
     (e_machine,) = struct.unpack_from(f"{endian}H", head, 0x12)
     arch: str | None = ELF_MACHINES.get(e_machine)
@@ -200,8 +226,12 @@ def _parse_elf(path: Path, head: bytes) -> BinaryInfo:
     if arch == "armv7l" and ei_class == 2:
         arch = "aarch64"
 
-    libc: str = _elf_libc(path, head, ei_class, endian)
-    return BinaryInfo(path=path, format="elf", os="linux", arch=arch, libc=libc)
+    # The interpreter path says which libc, which is only a Linux distinction;
+    # on the BSDs it names that system's own loader and means nothing here.
+    libc: str | None = (
+        _elf_libc(path, head, ei_class, endian) if os_name == "linux" else None
+    )
+    return BinaryInfo(path=path, format="elf", os=os_name, arch=arch, libc=libc)
 
 
 def _elf_libc(path: Path, head: bytes, ei_class: int, endian: str) -> str:

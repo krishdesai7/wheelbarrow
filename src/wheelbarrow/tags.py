@@ -69,7 +69,15 @@ def platform_tag(
                 f"pass --platform-tag explicitly"
             )
         return tag
-    raise InspectionError(f"unsupported operating system: {info.os}")
+    # Reachable for the BSDs and Solaris, whose binaries are ELF and so look
+    # Linux-shaped until EI_OSABI is read. Python packaging defines platform
+    # tags for Linux, macOS and Windows only, so there is nothing honest to
+    # return; refusing beats shipping a FreeBSD binary as manylinux.
+    raise InspectionError(
+        f"no wheel platform tag exists for {info.os}; Python packaging defines "
+        f"tags for Linux, macOS and Windows only. Pass --platform-tag explicitly "
+        f"to package it anyway."
+    )
 
 
 def _linux_tag(info: BinaryInfo, glibc_version: str | None) -> str:
