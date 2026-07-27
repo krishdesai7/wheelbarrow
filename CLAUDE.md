@@ -117,6 +117,27 @@ before the seventh.
 since `build_package` does `rmtree` then `copytree` and would otherwise leave only the
 last one.
 
+`builder.with_variants` is why a batch's README describes the batch. PyPI renders one description
+for a project and takes it from one of the uploaded files, so a README naming only its own binary
+is wrong on that page for everyone who installed a different platform's wheel. Every spec in a
+batch therefore gets the whole set — tag, kind and digest per wheel — and `scaffold._variant_facts`
+renders it. Two things are deliberately dropped in that mode: the `tag_note`, since each note
+explains one tag and the eleven do not share an explanation, and the `- **file**` line, since the
+packaged name varies (`starship` vs `starship.exe`). Without it every wheel in the batch renders a
+byte-identical block, which is the property that makes PyPI's choice of file not matter — there is
+a test asserting exactly that. `with_variants` copies the specs rather than mutating them: a
+caller's `PackageSpec` is theirs, and rewriting one in place would make a wheel's contents depend
+on whether the same object had been passed to an earlier batch.
+
+Every command ends by printing the one that usually follows it, via `cli._suggest` — the
+fetch → inspect → build → publish pipeline is only obvious to someone who already knows it.
+`_quote` is not `shlex.quote`: it must leave `dist/*.whl` unquoted so the shell still expands it,
+and leave `<name>` placeholders readable. When `inspect` or `build` meets a binary it cannot tag,
+`_removal_advice` prints the literal `rm -r` that clears the directory, naming both the unpacked
+tree *and* the archive beside it — leaving the tarball behind means the next `fetch --extract`
+puts the binary straight back. A test parses that line out of the output and runs it, so advice
+naming the wrong paths fails the suite rather than the user.
+
 ### Fetching is one HTTP choke point and two digest sources
 
 Every request `fetch.py` makes goes through `fetch._open`, which is what makes the suite
@@ -138,9 +159,22 @@ what separates them — a lone digest is only meaningful in a file whose *name* 
 covers, which is why only the sidecar path passes it.
 
 `is_checksum_asset` keeps checksum files out of the payload set even when a pattern matches them,
-so `'*.tar.gz*'` behaves the way anyone would expect. `select_assets` raising on a pattern that
-matches nothing is deliberate: a quiet empty result is how an upstream rename turns into a
-missing wheel three steps later.
+so `'*.tar.gz*'` behaves the way anyone would expect. `unpackable_reason` extends the same rule to
+assets that could never become a wheel — installers (`.msi`, `.deb`, …), signatures, documentation
+— so `--list` shows what `build` could consume rather than listing a `.msi` and letting the user
+discover three steps later that nothing can open it. Both are stated as a blacklist because the
+asset with *no* extension is the one that matters: a release shipping the bare executable is
+exactly what `build` wants, and a whitelist would drop it. The reasons are phrased as plural nouns
+so one string serves both the `--list` footer (`3 installers wheelbarrow cannot unpack`) and the
+error on a pattern that matched only those. `select_assets` raising on a pattern that matches
+nothing is deliberate: a quiet empty result is how an upstream rename turns into a missing wheel
+three steps later.
+
+`FetchedAsset.executables` decides membership by parsing the headers, never by the executable bit
+— the same rule as `discover.collect`, and for the same reason. A Windows-produced zip stores DOS
+attributes rather than a Unix mode, so `starship.exe` comes out of one with no `+x`; counting the
+bit reported "12 fetched, 9 extracted" for a release whose every archive held a binary, while
+`build` went on to package all twelve.
 
 `_extract_tar` reconstructs member paths with `m.name.lstrip("/")` rather than `m.name`. The
 `data` filter defangs an absolute member by stripping the leading separator instead of refusing

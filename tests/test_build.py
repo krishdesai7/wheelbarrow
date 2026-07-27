@@ -60,6 +60,13 @@ def entry_mode(info: zipfile.ZipInfo) -> int:
     return (info.external_attr >> 16) & 0o7777
 
 
+def _readme_of(wheel: Path) -> str:
+    """The wheel's long description, which is what PyPI renders as the page."""
+    with zipfile.ZipFile(wheel) as zf:
+        name = next(n for n in zf.namelist() if n.endswith(".dist-info/METADATA"))
+        return zf.read(name).decode()
+
+
 class TestCrossPlatformBuild:
     """The wheel's tag must follow the binary, not the build machine."""
 
@@ -438,11 +445,61 @@ class TestBatchBuilds:
     def test_a_batch_wheel_matches_the_same_build_done_alone(
         self, two_platforms, tmp_path
     ) -> None:
-        """Batching must be a loop, not a different code path."""
+        """Batching must be a loop, not a different code path.
+
+        Built from the spec the batch actually used, since that is the one
+        thing a batch changes: every wheel's README lists the whole set.
+        """
         batched = build_packages(two_platforms, tmp_path / "batch")
-        binary, spec = two_platforms[0]
-        alone = build_package(binary, spec, tmp_path / "alone")
+        binary, _ = two_platforms[0]
+        alone = build_package(binary, batched[0].spec, tmp_path / "alone")
         assert alone.wheel.read_bytes() == batched[0].wheel.read_bytes()
+
+    def test_the_callers_specs_are_left_alone(self, two_platforms, tmp_path) -> None:
+        """A caller's PackageSpec is theirs; a build must not rewrite it."""
+        build_packages(two_platforms, tmp_path / "dist")
+        assert all(spec.variants == [] for _, spec in two_platforms)
+
+    def test_every_wheel_describes_the_whole_set(self, two_platforms, tmp_path) -> None:
+        """PyPI shows one description for the project, whichever wheel it picks."""
+        results = build_packages(two_platforms, tmp_path / "dist")
+        tags = {r.tag.rpartition("-")[2] for r in results}
+        for result in results:
+            readme = _readme_of(result.wheel)
+            for tag in tags:
+                assert tag in readme, f"{result.tag} omits {tag}"
+
+    def test_each_wheels_own_digest_appears_in_all_of_them(
+        self, two_platforms, tmp_path
+    ) -> None:
+        results = build_packages(two_platforms, tmp_path / "dist")
+        digests = {
+            hashlib.sha256(binary.read_bytes()).hexdigest()
+            for binary, _ in two_platforms
+        }
+        for result in results:
+            readme = _readme_of(result.wheel)
+            assert all(digest in readme for digest in digests)
+
+    def test_a_lone_build_still_describes_only_itself(
+        self, two_platforms, tmp_path
+    ) -> None:
+        """One wheel is not a set, and its README must not grow a listing."""
+        results = build_packages(two_platforms[:1], tmp_path / "dist")
+        assert "These wheels repackage" not in _readme_of(results[0].wheel)
+
+    def test_every_wheel_renders_the_identical_block(
+        self, two_platforms, tmp_path
+    ) -> None:
+        """PyPI picks one wheel's description for the project; any must do.
+
+        The packaged file is named `tool` on Linux and `tool.exe` on Windows,
+        so a block naming it would differ per wheel and the page would be
+        wrong for whoever installed the other one.
+        """
+        results = build_packages(two_platforms, tmp_path / "dist")
+        blocks = {_readme_of(r.wheel).partition("## Provenance")[2] for r in results}
+        assert len(blocks) == 1
 
     def test_kept_projects_do_not_overwrite_each_other(
         self, two_platforms, tmp_path

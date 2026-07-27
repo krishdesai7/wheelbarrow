@@ -1,5 +1,7 @@
 """Command line interface for wheelbarrow."""
 
+import shlex
+from collections import defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Protocol
 
@@ -44,6 +46,31 @@ err_console = Console(stderr=True)
 def _fail(message: str) -> typer.Exit:
     err_console.print(f"[bold red]error:[/] {message}")
     return typer.Exit(code=1)
+
+
+def _suggest(purpose: str, *command: str | Path) -> None:
+    """Print the command that usually comes next, ready to paste.
+
+    Every successful command ends with one of these, because the pipeline --
+    fetch, inspect, build, publish -- is only obvious to someone who already
+    knows it.
+    """
+    rendered: str = " ".join(_quote(str(part)) for part in command)
+    console.print(f"[dim]{purpose}:[/]")
+    console.print(f"[dim]  {rendered}[/]")
+
+
+def _quote(part: str) -> str:
+    """Quote an argument for pasting, leaving the deliberate shell syntax alone.
+
+    `shlex.quote` is not usable directly: it would wrap `dist/*.whl` in quotes
+    and stop the shell expanding the glob these suggestions rely on, and turn
+    a `<name>` placeholder into unreadable noise. Only whitespace and quote
+    characters actually need escaping in a path wheelbarrow prints back.
+    """
+    if part and not set(part) & set(" \t\n'\"\\"):
+        return part
+    return shlex.quote(part)
 
 
 class _Helpable(Protocol):
@@ -111,7 +138,9 @@ def fetch_command(
             "--pattern",
             "-p",
             help="Glob of asset names to download, e.g. `*-apple-darwin.tar.gz`. "
-            "Repeatable. Omitted, every asset is downloaded.",
+            "Repeatable. Omitted, every asset wheelbarrow can build from is "
+            "downloaded -- installers, signatures and checksum files are "
+            "always skipped.",
         ),
     ] = None,
     list_assets: Annotated[
@@ -162,6 +191,15 @@ def fetch_command(
 
     if list_assets:
         _print_assets(release, chosen)
+        if chosen:
+            _suggest(
+                "download them",
+                "wheelbarrow",
+                "fetch",
+                source,
+                dest if dest != Path() else Path(release.repo),
+                *[arg for p in (pattern or ()) for arg in ("-p", p)],
+            )
         return
 
     try:
@@ -198,7 +236,13 @@ def _resolve_release(source: str, tag: str | None, *, timeout: float) -> fetch.R
 
 
 def _print_assets(release: fetch.Release, chosen: list[fetch.Asset]) -> None:
-    """List the release's assets, marking which ones would be downloaded."""
+    """List the assets `build` could use, marking which ones would be downloaded.
+
+    Assets nothing downstream can open -- installers, signatures, checksum
+    files -- are left out rather than listed and declined later. Their count is
+    still reported, so a release that publishes only `.msi` files reads as
+    "wheelbarrow cannot use these" instead of "this release is empty".
+    """
     selected: set[str] = {a.name for a in chosen}
     table = Table(box=None, pad_edge=False)
     table.add_column("", style="green")
@@ -206,9 +250,10 @@ def _print_assets(release: fetch.Release, chosen: list[fetch.Asset]) -> None:
     table.add_column("size", justify="right", style="dim")
     table.add_column("digest", style="dim")
 
-    for asset in release.assets:
-        if fetch.is_checksum_asset(asset.name):
-            continue
+    shown: list[fetch.Asset] = [
+        a for a in release.assets if fetch.is_payload_asset(a.name)
+    ]
+    for asset in shown:
         table.add_row(
             "*" if asset.name in selected else "",
             asset.name,
@@ -216,12 +261,35 @@ def _print_assets(release: fetch.Release, chosen: list[fetch.Asset]) -> None:
             "recorded" if asset.digest else "-",
         )
 
-    console.print(table)
-    if any(not a.digest for a in release.assets):
+    if shown:
+        console.print(table)
+    if any(not a.digest for a in shown):
         console.print(
             "[dim]note: assets showing no recorded digest are checked against "
             "a checksum file in the release instead, if it publishes one.[/]"
         )
+    _note_hidden_assets(release)
+
+
+def _note_hidden_assets(release: fetch.Release) -> None:
+    """Account for the assets left out of the table, grouped by why."""
+    hidden: dict[str, int] = defaultdict(int)
+    for asset in release.assets:
+        if fetch.is_payload_asset(asset.name):
+            continue
+        reason: str = (
+            "checksum files"
+            if fetch.is_checksum_asset(asset.name)
+            else str(fetch.unpackable_reason(asset.name))
+        )
+        hidden[reason] += 1
+
+    if not hidden:
+        return
+    listed: str = ", ".join(
+        f"{count} {reason}" for reason, count in sorted(hidden.items())
+    )
+    console.print(f"[dim]not shown: {listed}[/]")
 
 
 def _run_fetch(
@@ -280,10 +348,20 @@ def _report_fetched(results: list[fetch.FetchedAsset], dest: Path) -> None:
         + (f", {len(executables)} executable(s) extracted" if executables else "")
     )
 
-    if executables:
-        console.print("[dim]  build one with:[/]")
-        console.print(
-            f"[dim]    wheelbarrow build {executables[0]} -n <name> -V <version>[/]"
+    if len(executables) > 1:
+        # Point at the directory rather than the first binary: a release is a
+        # batch, and `build <dir>` is the command that packages all of it.
+        _suggest("check what they are", "wheelbarrow", "inspect", dest)
+    elif executables:
+        _suggest(
+            "build it",
+            "wheelbarrow",
+            "build",
+            executables[0],
+            "-n",
+            "<name>",
+            "-V",
+            "<version>",
         )
 
 
@@ -323,6 +401,9 @@ def inspect_command(
         except WheelbarrowError as exc:
             raise _fail(str(exc)) from exc
         _print_info(candidate.info, tag)
+        _suggest(
+            "build it", "wheelbarrow", "build", path, "-n", "<name>", "-V", "<version>"
+        )
         return
 
     _print_inventory(found, path, glibc=glibc)
@@ -344,6 +425,7 @@ def _print_inventory(
     table.add_column("platform tag", style="bold green", overflow="fold")
 
     reasons: list[str] = []
+    untaggable: list[Path] = []
     for candidate in found.candidates:
         relative: str = str(candidate.path.relative_to(root))
         try:
@@ -351,6 +433,7 @@ def _print_inventory(
         except WheelbarrowError as exc:
             tag = "[yellow]-[/]"
             reasons.append(f"{relative}: {exc}")
+            untaggable.append(candidate.path)
         # os and arch are left out: they are already spelled out by the tag,
         # and the compound tags are long enough to need the room.
         table.add_row(relative, tag)
@@ -363,6 +446,63 @@ def _print_inventory(
     console.print(f"[dim]{summary}[/]")
     for reason in reasons:
         console.print(f"[yellow]no tag:[/] {reason}")
+
+    if untaggable:
+        console.print(f"[dim]{_removal_advice(root, untaggable)}[/]")
+        _suggest("then confirm the directory is clean", "wheelbarrow", "inspect", root)
+        return
+
+    _suggest(
+        "build the whole directory",
+        "wheelbarrow",
+        "build",
+        root,
+        "-n",
+        "<name>",
+        "-V",
+        "<version>",
+    )
+
+
+def _removal_advice(root: Path, untaggable: list[Path]) -> str:
+    """Spell out the `rm` that makes a directory buildable.
+
+    `build` refuses a batch containing anything it cannot tag, so the fix is
+    always the same deletion -- and working out which paths that means is
+    tedious enough by hand that people delete the wrong thing. What comes out
+    of `fetch` is an unpacked directory beside the archive it came from, so
+    both are named: leaving the tarball behind means the next `fetch --extract`
+    puts the binary straight back.
+    """
+    targets: list[str] = []
+    for path in untaggable:
+        for target in _fetch_artifacts(root, path):
+            if str(target) not in targets:
+                targets.append(str(target))
+    joined: str = " ".join(_quote(t) for t in targets)
+    return f"remove them with: rm -r {joined}"
+
+
+def _fetch_artifacts(root: Path, path: Path) -> list[Path]:
+    """The paths to delete so `path` stops being discovered under `root`.
+
+    That is the top-level entry under `root` that contains it -- the unpacked
+    directory, not the binary alone, since an empty husk left behind is just
+    noise -- plus the archive it was unpacked from, if one is sitting beside it.
+    """
+    relative: Path = path.relative_to(root)
+    if not relative.parts:  # pragma: no cover - root is always a directory here
+        return [path]
+    top: Path = root / relative.parts[0]
+
+    artifacts: list[Path] = [top]
+    if top.is_dir():
+        artifacts += [
+            archive
+            for suffix in fetch.ARCHIVE_SUFFIXES
+            if (archive := top.with_name(top.name + suffix)).is_file()
+        ]
+    return artifacts
 
 
 def _print_info(info: BinaryInfo, tag: str) -> None:
@@ -511,6 +651,7 @@ def build_command(
         found: discover.Discovery = discover.collect(path)
         plans: list[tuple[Path, PackageSpec]] = _plan_builds(
             found,
+            root=path,
             aliases=aliases,
             override=platform_tag_override,
             glibc=glibc,
@@ -570,6 +711,7 @@ def build_command(
             f"[dim](launcher {spec.launcher.value}, "
             f"scripts {', '.join(spec.aliases)})[/]"
         )
+        _suggest_publish(output, [r.wheel for r in results])
         return
 
     result: BuildResult = results[0]
@@ -582,6 +724,24 @@ def build_command(
     console.print(f"[dim]  scripts  [/] {', '.join(spec.aliases)}")
     if result.project_dir:
         console.print(f"[dim]  project  [/] {result.project_dir}")
+    _suggest_publish(output, [result.wheel])
+
+
+def _suggest_publish(output: Path, wheels: list[Path]) -> None:
+    """Point at the upload, via `--dry-run` because publishing is permanent.
+
+    A batch is suggested as a glob rather than a list of names: the whole set
+    has to go up in one `uv publish`, and a user who uploads them one at a time
+    leaves the project half-published between runs.
+    """
+    target: str = str(wheels[0]) if len(wheels) == 1 else str(output / "*.whl")
+    _suggest(
+        "check what would be uploaded",
+        "wheelbarrow",
+        "publish",
+        target,
+        "--dry-run",
+    )
 
 
 def _report_built(result: BuildResult) -> None:
@@ -595,6 +755,7 @@ def _report_built(result: BuildResult) -> None:
 def _plan_builds(
     found: discover.Discovery,
     *,
+    root: Path,
     aliases: list[str] | None,
     override: str | None,
     glibc: str | None,
@@ -620,6 +781,7 @@ def _plan_builds(
 
     plans: list[tuple[Path, PackageSpec]] = []
     failures: list[str] = []
+    untaggable: list[Path] = []
     for candidate in candidates:
         try:
             tag: str = override or platform_tag(
@@ -632,6 +794,7 @@ def _plan_builds(
             if found.is_single:
                 raise  # one input, one question: answer it exactly as before
             failures.append(f"    {candidate.path}: {exc}")
+            untaggable.append(candidate.path)
             continue
 
         plans.append(
@@ -651,8 +814,9 @@ def _plan_builds(
         listed: str = "\n".join(failures)
         raise WheelbarrowError(
             f"no wheel tag could be determined for these executables:\n{listed}\n"
-            f"Remove them from the directory, or build the rest by pointing at "
-            f"a directory that excludes them."
+            f"{_removal_advice(root, untaggable)}\n"
+            f"Then re-run `wheelbarrow inspect {root}` to verify, or build the "
+            f"rest by pointing at a directory that excludes them."
         )
 
     return plans
@@ -804,6 +968,10 @@ def publish_command(
 
     if dry_run:
         console.print(f"\n[dim]dry run, would execute:[/] {plan.display()}")
+        _suggest(
+            "upload them for real",
+            *_invocation_without_dry_run(wheels, index, publish_url, username),
+        )
         return
 
     if not yes:
@@ -821,6 +989,56 @@ def publish_command(
         raise _fail(str(exc)) from exc
 
     console.print("[bold green]published[/]")
+    installed: str | None = _project_name(plan.files)
+    if installed:
+        _suggest("install it from the index", "uv", "tool", "install", installed)
+
+
+def _invocation_without_dry_run(
+    wheels: list[Path],
+    index: str | None,
+    publish_url: str | None,
+    username: str | None,
+) -> list[str]:
+    """Rebuild this `publish` invocation with `--dry-run` dropped.
+
+    Echoed back rather than described, because the flags that decide *where*
+    the upload goes are exactly the ones worth not retyping from memory when
+    the next run is the irreversible one.
+    """
+    command: list[str] = ["wheelbarrow", "publish", *_as_glob(wheels)]
+    for option, value in (
+        ("--index", index),
+        ("--publish-url", publish_url),
+        ("--username", username),
+    ):
+        if value:
+            command += [option, value]
+    return command
+
+
+def _as_glob(wheels: list[Path]) -> list[str]:
+    """Collapse a directory's worth of wheels back to the glob that named them.
+
+    Eleven absolute paths on one line is not a command anybody reads before
+    running, which defeats the point of echoing it back at all. Only done when
+    they all sit in one directory, since anything else would not round-trip.
+    """
+    parents: set[Path] = {w.parent for w in wheels}
+    if len(wheels) < 2 or len(parents) != 1:
+        return [str(w) for w in wheels]
+    return [str(parents.pop() / "*.whl")]
+
+
+def _project_name(files: list[Path]) -> str | None:
+    """The distribution name shared by a set of wheels, if they agree on one.
+
+    Wheel file names are `{name}-{version}-...`, with the name normalised to
+    underscores; PyPI accepts either spelling on install, so it is passed on
+    as-is rather than guessed back into hyphens.
+    """
+    names: set[str] = {f.name.split("-")[0] for f in files if "-" in f.name}
+    return names.pop() if len(names) == 1 else None
 
 
 @app.command("help")

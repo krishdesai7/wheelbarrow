@@ -39,7 +39,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
 from . import __version__
-from .errors import FetchError
+from .errors import FetchError, InspectionError
+from .probe import inspect_binary
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -97,6 +98,40 @@ CHECKSUM_GLOBS: Final[tuple[str, ...]] = (
     "*checksums*",
     "*.sha256",
 )
+
+#: Platform installers. Each is a container format of its own that nothing here
+#: can open, so the executable inside is out of reach even though the asset is
+#: exactly the program the user wants.
+INSTALLER_SUFFIXES: Final[tuple[str, ...]] = (
+    ".msi",
+    ".deb",
+    ".rpm",
+    ".pkg",
+    ".dmg",
+    ".apk",
+    ".snap",
+    ".nupkg",
+    ".flatpak",
+    ".appx",
+    ".msix",
+)
+
+#: Signatures and attestations. They describe a payload rather than being one,
+#: and wheelbarrow does not verify signatures -- only digests.
+SIGNATURE_SUFFIXES: Final[tuple[str, ...]] = (
+    ".sig",
+    ".asc",
+    ".pem",
+    ".crt",
+    ".cert",
+    ".sigstore",
+    ".intoto.jsonl",
+    ".sbom.json",
+    ".spdx.json",
+)
+
+#: Documentation and metadata shipped alongside a release.
+DOC_SUFFIXES: Final[tuple[str, ...]] = (".txt", ".md", ".pdf", ".json")
 
 
 @dataclass(frozen=True)
@@ -156,13 +191,28 @@ class FetchedAsset:
 
     @property
     def executables(self) -> tuple[Path, ...]:
-        """Extracted files carrying an executable bit -- what `build` wants."""
-        return tuple(p for p in self.extracted if os.access(p, os.X_OK))
+        """Extracted files that parse as executables -- what `build` will find.
+
+        Decided by the headers, never by the executable bit, for the same
+        reason `discover.collect` decides it that way: a Windows-produced zip
+        stores DOS attributes rather than a Unix mode, so `starship.exe` comes
+        out of one with no `+x` and would go uncounted here while `build`
+        packaged it perfectly happily.
+        """
+        return tuple(p for p in self.extracted if _parses_as_executable(p))
 
 
 # --------------------------------------------------------------------------
 # Naming
 # --------------------------------------------------------------------------
+
+
+def _parses_as_executable(path: Path) -> bool:
+    try:
+        inspect_binary(path)
+    except InspectionError, OSError:
+        return False
+    return True
 
 
 def archive_stem(name: str) -> str:
@@ -190,6 +240,37 @@ def is_checksum_asset(name: str) -> bool:
     if lowered.endswith(SIDECAR_SUFFIXES):
         return True
     return any(fnmatch.fnmatch(lowered, glob) for glob in CHECKSUM_GLOBS)
+
+
+def unpackable_reason(name: str) -> str | None:
+    """Which unusable category an asset falls into, or `None` if it might build.
+
+    Stated as a blacklist rather than a whitelist because the interesting case
+    is the asset with no extension at all: a release that ships the bare
+    executable is exactly what `build` wants, and a whitelist would drop it.
+
+    Phrased as a plural noun so it reads both as a count (`3 installers
+    wheelbarrow cannot unpack`) and as the reason a pattern matched nothing.
+    """
+    lowered: str = name.lower()
+    if lowered.endswith(INSTALLER_SUFFIXES):
+        return "installers wheelbarrow cannot unpack"
+    if lowered.endswith(SIGNATURE_SUFFIXES):
+        return "signatures and attestations, which are not payloads"
+    if lowered.endswith(DOC_SUFFIXES):
+        return "documentation and metadata rather than programs"
+    return None
+
+
+def is_payload_asset(name: str) -> bool:
+    """Whether an asset is something `build` could eventually consume.
+
+    This is the set `--list` shows and the set a bare `fetch` downloads. Both
+    exclusions are held to the same rule as `is_checksum_asset`: an asset that
+    cannot become a wheel is filtered out even when a pattern matches it, so
+    `-p '*windows*'` does not drag in the `.msi` beside the `.zip`.
+    """
+    return not is_checksum_asset(name) and unpackable_reason(name) is None
 
 
 # --------------------------------------------------------------------------
@@ -428,7 +509,7 @@ def select_assets(release: Release, patterns: Sequence[str]) -> list[Asset]:
     silently downloading fewer files than asked for is the failure that would
     surface much later as a missing wheel.
     """
-    payload: list[Asset] = [a for a in release.assets if not is_checksum_asset(a.name)]
+    payload: list[Asset] = [a for a in release.assets if is_payload_asset(a.name)]
     if not patterns:
         return payload
 
@@ -436,21 +517,37 @@ def select_assets(release: Release, patterns: Sequence[str]) -> list[Asset]:
     for pattern in patterns:
         matched: list[Asset] = [a for a in payload if fnmatch.fnmatch(a.name, pattern)]
         if not matched:
-            swept: bool = any(fnmatch.fnmatch(a.name, pattern) for a in release.assets)
-            detail: str = (
-                " (it matched only checksum files, which are fetched "
-                "automatically when needed)"
-                if swept
-                else ""
-            )
             available: str = "\n".join(f"    {a.name}" for a in payload)
             raise FetchError(
                 f"no asset in {release.slug} {release.tag} matches "
-                f"{pattern!r}{detail}. Available:\n{available}"
+                f"{pattern!r}{_filtered_detail(release, pattern)}. "
+                f"Available:\n{available}"
             )
         wanted.update(a.name for a in matched)
 
     return [a for a in payload if a.name in wanted]
+
+
+def _filtered_detail(release: Release, pattern: str) -> str:
+    """Explain a pattern that matched only assets `select_assets` filters out.
+
+    Without this the message reads as though the release does not publish the
+    file at all, when in fact it does and wheelbarrow declined it -- which
+    sends the reader looking for a naming change that never happened.
+    """
+    swept: list[Asset] = [a for a in release.assets if fnmatch.fnmatch(a.name, pattern)]
+    if not swept:
+        return ""
+
+    reasons: list[str] = sorted(
+        {
+            "checksum files, which are fetched automatically when needed"
+            if is_checksum_asset(a.name)
+            else str(unpackable_reason(a.name))
+            for a in swept
+        }
+    )
+    return " (it matched only " + "; ".join(reasons) + ")"
 
 
 # --------------------------------------------------------------------------

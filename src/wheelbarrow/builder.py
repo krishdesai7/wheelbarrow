@@ -15,7 +15,7 @@ import hashlib
 import shutil
 import tempfile
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     from pyproject_hooks import SubprocessRunner
 
 from .errors import BuildError
-from .scaffold import PackageSpec, archive_executables, scaffold_project
+from .scaffold import PackageSpec, Variant, archive_executables, scaffold_project
 from .tags import full_tag
 from .wheelfix import RetagResult, retag_wheel
 
@@ -152,6 +152,7 @@ def build_packages(
     the user is not watching each one.
     """
     refuse_tag_collisions(plans)
+    plans = with_variants(plans)
 
     results: list[BuildResult] = []
     for binary, spec in plans:
@@ -168,6 +169,36 @@ def build_packages(
         if on_built:
             on_built(result)
     return results
+
+
+def with_variants(
+    plans: Sequence[tuple[Path, PackageSpec]],
+) -> list[tuple[Path, PackageSpec]]:
+    """Copy the plans, telling every spec about the whole set for its README.
+
+    Done here rather than in the caller because it is the same kind of thing
+    `build_packages` already does -- one name and one version across the set --
+    and because the README is only wrong about a batch when it was built as
+    one. A single-element batch is returned untouched: its README has nothing
+    to reconcile, and giving it a one-row list would change the output of every
+    existing single-wheel build.
+
+    The specs are replaced rather than mutated. A caller's `PackageSpec` is
+    theirs, and quietly rewriting one here would make a wheel's contents depend
+    on whether the same object had been passed to an earlier batch.
+    """
+    if len(plans) < 2:
+        return list(plans)
+
+    variants: list[Variant] = [
+        Variant(
+            platform_tag=spec.platform_tag,
+            sha256=spec.provenance.sha256 if spec.provenance else _digest(binary),
+            kind=spec.provenance.kind if spec.provenance else "",
+        )
+        for binary, spec in plans
+    ]
+    return [(binary, replace(spec, variants=list(variants))) for binary, spec in plans]
 
 
 def _keep_dir(

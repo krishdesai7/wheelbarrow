@@ -47,6 +47,7 @@ from .templates import (
     INIT_SHIM,
     LAUNCHER_NOTES,
     MAIN,
+    PROVENANCE_INTROS,
     PYPROJECT,
     README,
     Template,
@@ -121,6 +122,22 @@ class Provenance:
     kind: str
     #: What the wheel tag means in words, or empty when it speaks for itself.
     note: str = ""
+
+
+@dataclass(frozen=True)
+class Variant:
+    """One wheel in a multi-platform set, as the README lists it.
+
+    A batch shares a project name, so PyPI shows a single description page for
+    all of it -- and picks one wheel's METADATA to render. A README describing
+    only the file in its own wheel is therefore wrong on that page eleven times
+    out of eleven, which is what this exists to fix.
+    """
+
+    platform_tag: str
+    sha256: str
+    #: The `Provenance.kind` line for this variant, or empty if never inspected.
+    kind: str = ""
 
 
 def describe_input(info: BinaryInfo, binary: Path, platform_tag: str) -> Provenance:
@@ -219,6 +236,9 @@ class PackageSpec:
     urls: dict[str, str] = field(default_factory=dict)
     #: Optional: callers that inspected the input can describe it in the README.
     provenance: Provenance | None = None
+    #: Every wheel built alongside this one, when it is part of a batch. Left
+    #: empty for a lone wheel, whose README describes just itself.
+    variants: list[Variant] = field(default_factory=list)
 
     @property
     def installed_names(self) -> list[str]:
@@ -267,6 +287,7 @@ def make_spec(
     keywords: list[str] | None = None,
     homepage: str | None = None,
     provenance: Provenance | None = None,
+    variants: list[Variant] | None = None,
 ) -> PackageSpec:
     """Validate and normalise user-supplied metadata into a `PackageSpec`."""
     dist_name: str = _normalise_name(name)
@@ -304,6 +325,7 @@ def make_spec(
         keywords=keywords or [],
         urls=urls,
         provenance=provenance,
+        variants=list(variants or []),
     )
 
 
@@ -492,15 +514,21 @@ def render_readme(spec: PackageSpec) -> str:
     input: a library caller who builds a `PackageSpec` by hand still gets a
     correct README, just without the digest and the description of the file.
     """
-    facts: list[str] = [f"- **file** — `{spec.binary_name}`"]
+    batched: bool = len(spec.variants) > 1
+    facts: list[str]
     note: str = ""
-    if spec.provenance is not None:
-        facts += [
-            f"- **kind** — {spec.provenance.kind}",
-            f"- **sha256** — `{spec.provenance.sha256}`",
-        ]
-        note = spec.provenance.note
-    facts.append(f"- **wheel tag** — `{spec.platform_tag}`")
+
+    if batched:
+        facts = _variant_facts(spec)
+    else:
+        facts = [f"- **file** — `{spec.binary_name}`"]
+        if spec.provenance is not None:
+            facts += [
+                f"- **kind** — {spec.provenance.kind}",
+                f"- **sha256** — `{spec.provenance.sha256}`",
+            ]
+            note = spec.provenance.note
+        facts.append(f"- **wheel tag** — `{spec.platform_tag}`")
 
     return README.substitute(
         dist_name=spec.dist_name,
@@ -508,6 +536,45 @@ def render_readme(spec: PackageSpec) -> str:
         module=spec.module,
         alias_list=", ".join(f"`{a}`" for a in spec.aliases),
         launcher_note=textwrap.fill(LAUNCHER_NOTES[spec.launcher.value], _WRAP),
+        provenance_intro=textwrap.fill(
+            PROVENANCE_INTROS["set" if batched else "solo"], _WRAP
+        ),
         provenance_facts="\n".join(facts),
         tag_note=f"\n{textwrap.fill(note, _WRAP)}\n" if note else "",
     )
+
+
+def _variant_facts(spec: PackageSpec) -> list[str]:
+    """List every wheel in the set, digest included.
+
+    No entry is marked as "this one": the reader is on a project page that
+    renders one wheel's description for all of them, so a "this wheel" would
+    point at whichever file PyPI happened to render and mean nothing to
+    somebody installing a different platform's.
+
+    `tag_note` is dropped in this mode for the same reason. Each note explains
+    one tag, and the eleven tags here do not share an explanation.
+
+    The `file` line goes too: the packaged name varies across the set --
+    `starship` on Linux, `starship.exe` on Windows -- so stating one of them is
+    false for the rest. Without it every wheel in the batch renders exactly the
+    same block, which is the property that makes it safe for PyPI to pick any
+    one of them as the project description.
+    """
+    facts: list[str] = []
+    for variant in sorted(spec.variants, key=lambda v: v.platform_tag):
+        facts.append(f"- **`{variant.platform_tag}`**")
+        if variant.kind:
+            # Continuation lines of a list item: markdown reflows them into one
+            # entry, and wrapping keeps the source inside the same 88 columns
+            # every other generated line respects.
+            facts.append(
+                textwrap.fill(
+                    variant.kind,
+                    _WRAP,
+                    initial_indent="  ",
+                    subsequent_indent="  ",
+                )
+            )
+        facts.append(f"  sha256 `{variant.sha256}`")
+    return facts

@@ -185,6 +185,27 @@ LAUNCHER_NOTES: Final[dict[str, str]] = {
     ),
 }
 
+#: Opening of the README's provenance section. Two of them, because a project
+#: publishing one wheel and a project publishing eleven are describing
+#: genuinely different things, and PyPI renders whichever wheel's description
+#: it happens to pick as the page for the whole project.
+PROVENANCE_INTROS: Final[dict[str, str]] = {
+    "solo": (
+        "This wheel repackages a program somebody else built. wheelbarrow does "
+        "not compile or modify it, so what is inside the wheel is exactly what "
+        "it was handed — and the digest below is there to be checked against "
+        "whatever the tool's own publisher lists."
+    ),
+    "set": (
+        "These wheels repackage a program somebody else built. wheelbarrow "
+        "does not compile or modify it, so what is inside each wheel is "
+        "exactly what it was handed — and the digests below are there to be "
+        "checked against whatever the tool's own publisher lists. One wheel is "
+        "published per platform; your installer picks the one matching your "
+        "machine."
+    ),
+}
+
 README: Final[Template] = Template(
     """\
 # $dist_name
@@ -214,10 +235,7 @@ print(binary_path())
 
 ## Provenance
 
-This wheel repackages a program somebody else built. wheelbarrow does not
-compile or modify it, so what is inside the wheel is exactly what it was
-handed — and the digest below is there to be checked against whatever the
-tool's own publisher lists.
+$provenance_intro
 
 $provenance_facts
 $tag_note

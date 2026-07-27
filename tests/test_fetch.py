@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import pytest
 
-from wheelbarrow import fetch
+from wheelbarrow import discover, fetch
 from wheelbarrow.errors import FetchError
 from wheelbarrow.fetch import Asset, Release
 
@@ -282,6 +282,70 @@ class TestSelectAssets:
             fetch.select_assets(full, ["*.sha256"])
 
 
+class TestUnpackableAssetsAreNotPayload:
+    """Assets nothing downstream can open are filtered out like checksums are.
+
+    Listing an installer and then declining it at build time sends the user
+    off to work out why a file the release plainly publishes never appeared.
+    """
+
+    @pytest.fixture
+    def mixed(self) -> Release:
+        return release(
+            asset("tool-windows.zip"),
+            asset("tool-windows.msi"),
+            asset("tool-linux.tar.gz"),
+            asset("tool-linux.deb"),
+            asset("tool-linux.rpm"),
+            asset("tool.tar.gz.sig"),
+            asset("README.md"),
+            asset("tool.sbom.json"),
+        )
+
+    def test_installers_are_left_out_of_the_default_set(self, mixed) -> None:
+        assert [a.name for a in fetch.select_assets(mixed, [])] == [
+            "tool-windows.zip",
+            "tool-linux.tar.gz",
+        ]
+
+    def test_a_pattern_cannot_drag_an_installer_back_in(self, mixed) -> None:
+        """`-p '*windows*'` means the zip, not the .msi sitting beside it."""
+        chosen = fetch.select_assets(mixed, ["*windows*"])
+        assert [a.name for a in chosen] == ["tool-windows.zip"]
+
+    def test_a_pattern_matching_only_installers_says_why(self, mixed) -> None:
+        with pytest.raises(FetchError, match="cannot unpack"):
+            fetch.select_assets(mixed, ["*.msi"])
+
+    def test_a_pattern_matching_only_signatures_says_why(self, mixed) -> None:
+        with pytest.raises(FetchError, match="signatures and attestations"):
+            fetch.select_assets(mixed, ["*.sig"])
+
+    def test_an_extensionless_asset_is_still_payload(self) -> None:
+        """A release shipping the bare executable is the case a whitelist breaks."""
+        bare = release(asset("tool-linux-amd64"), asset("tool.msi"))
+        assert [a.name for a in fetch.select_assets(bare, [])] == ["tool-linux-amd64"]
+
+    @pytest.mark.parametrize(
+        "name",
+        ["tool.MSI", "tool.Deb", "TOOL.PKG"],
+    )
+    def test_the_check_is_case_insensitive(self, name) -> None:
+        assert not fetch.is_payload_asset(name)
+
+    def test_a_reason_is_given_for_every_exclusion(self, mixed) -> None:
+        """`--list` prints these, so none may come back as None or empty."""
+        excluded = [
+            a.name
+            for a in mixed.assets
+            if not fetch.is_payload_asset(a.name)
+            and not fetch.is_checksum_asset(a.name)
+        ]
+        assert excluded  # guard against the fixture drifting to all-payload
+        for name in excluded:
+            assert fetch.unpackable_reason(name)
+
+
 # --------------------------------------------------------------------------
 # Checksums
 # --------------------------------------------------------------------------
@@ -533,6 +597,16 @@ class TestExtract:
         plain.write_bytes(PAYLOAD)
         assert fetch.extract(plain, tmp_path / "out") == []
 
+    def test_a_windows_zip_leaves_the_exe_without_a_mode(self, tmp_path) -> None:
+        """The precondition for the counting bug: a real .exe, no `+x` on disk.
+
+        A zip written on Windows stores DOS attributes rather than a Unix mode,
+        which is what `make_zip(..., 0)` reproduces here.
+        """
+        archive = make_zip(tmp_path / "tool.zip", {"tool.exe": (PAYLOAD, 0)})
+        written = fetch.extract(archive, tmp_path / "out")
+        assert not written[0].stat().st_mode & 0o111
+
     @pytest.mark.parametrize(
         ("name", "stem"),
         [
@@ -545,6 +619,52 @@ class TestExtract:
     )
     def test_the_extraction_directory_drops_the_whole_suffix(self, name, stem) -> None:
         assert fetch.archive_stem(name) == stem
+
+
+class TestExtractedExecutablesAreCountedByParsing:
+    """`FetchedAsset.executables` must agree with what `build` will discover.
+
+    Both decide membership from the headers. Counting the executable bit
+    instead undercounts exactly the files a Windows zip strips it from, so the
+    summary claims fewer binaries than the very next command finds.
+    """
+
+    def fetched(self, *paths: Path) -> fetch.FetchedAsset:
+        return fetch.FetchedAsset(
+            asset=asset("tool.zip"),
+            path=paths[0],
+            digest=DIGEST,
+            extracted=tuple(paths),
+        )
+
+    def test_a_binary_without_the_executable_bit_still_counts(self, tmp_path) -> None:
+        unmarked = tmp_path / "tool.exe"
+        unmarked.write_bytes(PAYLOAD)
+        unmarked.chmod(0o644)
+        assert self.fetched(unmarked).executables == (unmarked,)
+
+    def test_a_file_that_does_not_parse_is_not_counted(self, tmp_path) -> None:
+        readme = tmp_path / "README"
+        readme.write_bytes(b"just some prose\n")
+        assert self.fetched(readme).executables == ()
+
+    def test_an_executable_bit_alone_does_not_qualify(self, tmp_path) -> None:
+        """The inverse error: chmod +x on a text file is not a program."""
+        script = tmp_path / "notes"
+        script.write_bytes(b"still just prose\n")
+        script.chmod(0o755)
+        assert self.fetched(script).executables == ()
+
+    def test_the_count_matches_what_discover_finds(self, tmp_path) -> None:
+        binary = tmp_path / "tool.exe"
+        binary.write_bytes(PAYLOAD)
+        binary.chmod(0o644)
+        (tmp_path / "README").write_bytes(b"prose\n")
+
+        found = discover.collect(tmp_path)
+        assert len(self.fetched(binary, tmp_path / "README").executables) == len(
+            found.candidates
+        )
 
 
 # --------------------------------------------------------------------------

@@ -14,6 +14,8 @@ from wheelbarrow.scaffold import (
     SCRIPTS_DIR,
     Launcher,
     PackageSpec,
+    Provenance,
+    Variant,
     archive_executables,
     describe_input,
     make_spec,
@@ -345,7 +347,7 @@ class TestShimLauncher:
 class TestProvenanceDescription:
     """What the generated README says about the file it wraps."""
 
-    def describe(self, path, tag):
+    def describe(self, path, tag: str) -> Provenance:
         return describe_input(inspect_binary(path), path, tag)
 
     def test_the_digest_is_of_the_file_as_packaged(self, write_binary) -> None:
@@ -384,7 +386,7 @@ class TestProvenanceDescription:
 class TestProvenanceTagNotes:
     """The tag is glossed, but only where it and the binary agree."""
 
-    def note(self, path, tag) -> str:
+    def note(self, path, tag: str) -> str:
         return describe_input(inspect_binary(path), path, tag).note
 
     def test_a_script_is_told_its_tag_promises_too_much(self, shell_script) -> None:
@@ -435,7 +437,7 @@ class TestProvenanceTagNotes:
 class TestReadmeProvenance:
     """The rendered README carries the facts, and survives without them."""
 
-    def readme(self, path, tag, **overrides) -> str:
+    def readme(self, path, tag: str, **overrides) -> str:
         return render_readme(
             spec(
                 platform_tag=tag,
@@ -471,4 +473,70 @@ class TestReadmeProvenance:
     def test_generated_markdown_is_wrapped(self, shell_script) -> None:
         """A long interpreter path must not leave a 200-column line behind."""
         text = self.readme(shell_script, "any")
+        assert max(len(line) for line in text.splitlines()) <= 88
+
+
+class TestReadmeDescribesTheWholeSet:
+    """A batch shares one PyPI page, so one wheel's README speaks for all of them.
+
+    PyPI renders a single description per project, taken from one of the
+    uploaded files. A README naming only its own binary is therefore wrong for
+    every reader who installed a different platform's wheel.
+    """
+
+    def batch(self, **overrides) -> str:
+        variants = [
+            Variant(
+                platform_tag="macosx_11_0_arm64",
+                sha256="a" * 64,
+                kind="Mach-O executable, macos/arm64, macOS 11.0+",
+            ),
+            Variant(
+                platform_tag="manylinux_2_17_x86_64.musllinux_1_2_x86_64",
+                sha256="b" * 64,
+                kind="ELF executable, linux/x86_64, statically linked",
+            ),
+            Variant(
+                platform_tag="win_amd64",
+                sha256="c" * 64,
+                kind="PE executable, windows/x86_64",
+            ),
+        ]
+        return render_readme(spec(variants=variants, **overrides))
+
+    def test_every_wheel_in_the_set_is_listed(self) -> None:
+        text = self.batch()
+        for tag in ("macosx_11_0_arm64", "win_amd64", "musllinux_1_2_x86_64"):
+            assert tag in text
+
+    def test_every_digest_is_present(self) -> None:
+        text = self.batch()
+        for digest in ("a" * 64, "b" * 64, "c" * 64):
+            assert f"`{digest}`" in text
+
+    def test_it_does_not_single_one_out_as_this_wheel(self) -> None:
+        """The reader cannot tell which wheel's description PyPI chose to show."""
+        text = self.batch()
+        assert "This wheel repackages" not in text
+        assert "These wheels repackage" in text
+
+    def test_the_listing_is_ordered_by_tag_not_build_order(self) -> None:
+        """Same set, same page, whichever wheel PyPI happens to render."""
+        text = self.batch()
+        positions = [
+            text.index("macosx_11_0_arm64"),
+            text.index("manylinux_2_17_x86_64"),
+            text.index("win_amd64"),
+        ]
+        assert positions == sorted(positions)
+
+    def test_a_single_variant_still_reads_as_one_wheel(self) -> None:
+        """One wheel is not a set; its README must not change shape."""
+        text = render_readme(
+            spec(variants=[Variant(platform_tag="win_amd64", sha256="d" * 64)])
+        )
+        assert "This wheel repackages" in text
+
+    def test_generated_markdown_is_wrapped(self) -> None:
+        text = self.batch()
         assert max(len(line) for line in text.splitlines()) <= 88

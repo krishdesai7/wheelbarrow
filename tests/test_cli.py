@@ -2,6 +2,9 @@
 
 import json
 import re
+import shlex
+import shutil
+from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner, Result
@@ -401,6 +404,195 @@ class TestDirectoryInput:
         assert "no executable" in everything_written(result)
 
 
+class TestUntaggableBinariesComeWithTheFix:
+    """Naming the problem is half of it; the `rm` that clears it is the rest.
+
+    `build` refuses the whole batch, so the user has to delete something before
+    anything works -- and working out which paths that means, with an unpacked
+    directory sitting beside the archive it came from, is where they get it
+    wrong and leave the tarball behind for the next extract to restore.
+    """
+
+    @pytest.fixture
+    def with_bsd(self, tmp_path):
+        """A fetch-shaped directory: unpacked trees beside their archives."""
+        root = tmp_path / "downloads"
+        for name, data in [
+            ("tool-linux", make_elf(0x3E, interp=None)),
+            ("tool-freebsd", make_elf(0x3E, osabi=0x09)),
+        ]:
+            (root / name).mkdir(parents=True)
+            (root / name / "tool").write_bytes(data)
+            (root / f"{name}.tar.gz").write_bytes(b"\x1f\x8b\x08 not a real archive")
+        return root
+
+    def test_inspect_spells_out_the_removal(self, with_bsd) -> None:
+        rendered = plain_output(run("inspect", str(with_bsd)))
+        assert "rm -r" in rendered
+        assert str(with_bsd / "tool-freebsd") in rendered
+
+    def test_the_archive_is_removed_too_not_just_the_directory(self, with_bsd) -> None:
+        """Leaving it means the next --extract puts the binary straight back."""
+        rendered = plain_output(run("inspect", str(with_bsd)))
+        assert str(with_bsd / "tool-freebsd.tar.gz") in rendered
+
+    def test_the_usable_binaries_are_not_offered_for_deletion(self, with_bsd) -> None:
+        rendered = plain_output(run("inspect", str(with_bsd)))
+        advice = rendered[rendered.index("rm -r") :]
+        assert "tool-linux" not in advice
+
+    def test_inspect_then_says_how_to_verify(self, with_bsd) -> None:
+        rendered = plain_output(run("inspect", str(with_bsd)))
+        assert f"wheelbarrow inspect {with_bsd}" in rendered
+
+    def test_build_gives_the_same_removal(self, with_bsd, tmp_path) -> None:
+        result = run(
+            "build",
+            str(with_bsd),
+            "-n",
+            "demo-bin",
+            "-V",
+            "1.0.0",
+            "-o",
+            str(tmp_path / "dist"),
+            "--no-check-name",
+        )
+        assert result.exit_code == 1
+        written = everything_written(result)
+        assert "rm -r" in written
+        assert str(with_bsd / "tool-freebsd.tar.gz") in written
+        assert not (tmp_path / "dist").exists()
+
+    def test_the_advice_is_what_actually_clears_the_directory(
+        self, with_bsd, tmp_path
+    ) -> None:
+        """The end-to-end claim: run the printed command, and the build works.
+
+        Parsed out of the output and executed rather than reimplemented, so a
+        suggestion that names the wrong paths fails here.
+        """
+        rendered = plain_output(run("inspect", str(with_bsd)))
+        line = next(line for line in rendered.splitlines() if "rm -r " in line)
+        for target in shlex.split(line[line.index("rm -r ") :])[2:]:
+            path = Path(target)
+            shutil.rmtree(path) if path.is_dir() else path.unlink()
+
+        result = run(
+            "build",
+            str(with_bsd),
+            "-n",
+            "demo-bin",
+            "-V",
+            "1.0.0",
+            "-o",
+            str(tmp_path / "dist"),
+            "--no-check-name",
+        )
+        assert result.exit_code == 0, everything_written(result)
+        assert len(list((tmp_path / "dist").glob("*.whl"))) == 1
+
+
+class TestCommandsPointAtTheNextStep:
+    """Each command ends by naming the one that usually follows it."""
+
+    @pytest.fixture
+    def binary(self, tmp_path):
+        path = tmp_path / "tool"
+        path.write_bytes(make_elf(0x3E, interp=None))
+        return path
+
+    def test_inspect_of_one_file_suggests_building_it(self, binary) -> None:
+        rendered = plain_output(run("inspect", str(binary)))
+        assert f"wheelbarrow build {binary}" in rendered
+
+    def test_inspect_of_a_clean_directory_suggests_building_it(self, binary) -> None:
+        """The directory, not the first binary: a release is built as a batch."""
+        rendered = plain_output(run("inspect", str(binary.parent)))
+        assert f"wheelbarrow build {binary.parent}" in rendered
+
+    def test_build_suggests_a_publish_dry_run(self, binary, tmp_path) -> None:
+        result = run(
+            "build",
+            str(binary),
+            "-n",
+            "demo-bin",
+            "-V",
+            "1.0.0",
+            "-o",
+            str(tmp_path / "dist"),
+            "--no-check-name",
+        )
+        rendered = plain_output(result)
+        assert "wheelbarrow publish" in rendered
+        assert "--dry-run" in rendered
+
+    def test_a_batch_build_suggests_publishing_all_of_them(self, tmp_path) -> None:
+        """One `uv publish`, or the project sits half-uploaded between runs."""
+        root = tmp_path / "downloads"
+        root.mkdir()
+        (root / "linux").mkdir()
+        (root / "linux" / "tool").write_bytes(make_elf(0x3E, interp=None))
+        (root / "windows").mkdir()
+        (root / "windows" / "tool").write_bytes(make_pe(0x8664))
+        result = run(
+            "build",
+            str(root),
+            "-n",
+            "demo-bin",
+            "-V",
+            "1.0.0",
+            "-o",
+            str(tmp_path / "dist"),
+            "--no-check-name",
+        )
+        assert result.exit_code == 0
+        assert "*.whl" in plain_output(result)
+
+    def test_a_publish_dry_run_suggests_the_real_thing(self, binary, tmp_path) -> None:
+        run(
+            "build",
+            str(binary),
+            "-n",
+            "demo-bin",
+            "-V",
+            "1.0.0",
+            "-o",
+            str(tmp_path / "dist"),
+            "--no-check-name",
+        )
+        wheel = next((tmp_path / "dist").glob("*.whl"))
+        rendered = plain_output(
+            run(
+                "publish",
+                str(wheel),
+                "--publish-url",
+                "https://test.pypi.org/legacy/",
+                "--dry-run",
+            )
+        )
+        assert "upload them for real" in rendered
+        # The flag that decides *where* it goes has to survive into the rerun.
+        assert "--publish-url https://test.pypi.org/legacy/" in rendered
+        assert "--dry-run" not in rendered.split("upload them for real")[1]
+
+    def test_a_batch_rerun_is_a_glob_not_eleven_paths(self, tmp_path) -> None:
+        """A line nobody reads before running defeats the point of echoing it."""
+        wheels = [tmp_path / f"demo-{i}.whl" for i in range(11)]
+        assert cli._as_glob(wheels) == [str(tmp_path / "*.whl")]
+
+    def test_wheels_from_different_directories_stay_spelled_out(self, tmp_path) -> None:
+        """A glob over one of them would not name the others at all."""
+        wheels = [tmp_path / "a" / "x.whl", tmp_path / "b" / "y.whl"]
+        assert cli._as_glob(wheels) == [str(w) for w in wheels]
+
+    def test_a_glob_is_not_quoted_out_of_usefulness(self) -> None:
+        """`dist/*.whl` must reach the shell as a glob, not a literal name."""
+        assert cli._quote("dist/*.whl") == "dist/*.whl"
+
+    def test_a_path_with_a_space_still_comes_out_runnable(self) -> None:
+        assert cli._quote("my downloads/tool") == "'my downloads/tool'"
+
+
 class TestFetchCommand:
     """`fetch`, with GitHub replaced by the `fake_http` routing table."""
 
@@ -540,6 +732,102 @@ class TestFetchCommand:
     def test_there_is_no_token_option(self) -> None:
         """Like publishing, the credential is environment-only."""
         assert "--token" not in plain_output(run("fetch", "--help"))
+
+
+class TestFetchHidesWhatItCannotUse:
+    """`--list` shows the assets `build` could consume, and nothing else.
+
+    Listing an installer and declining it later sends the user hunting for a
+    rename that never happened.
+    """
+
+    API = "https://api.github.com/repos/acme/tool/releases/tags/v1.0.0"
+
+    def stub_release(self, routes, tarball) -> None:
+        data, checksum = tarball
+        assets = [
+            ("tool-linux.tar.gz", f"sha256:{checksum}"),
+            ("tool-windows.msi", f"sha256:{'a' * 64}"),
+            ("tool-linux.deb", f"sha256:{'b' * 64}"),
+            ("tool-linux.tar.gz.sha256", f"sha256:{'c' * 64}"),
+        ]
+        routes[self.API] = json.dumps(
+            {
+                "tag_name": "v1.0.0",
+                "assets": [
+                    {
+                        "name": name,
+                        "browser_download_url": f"https://example.test/{name}",
+                        "size": len(data),
+                        "digest": digest,
+                    }
+                    for name, digest in assets
+                ],
+            }
+        ).encode()
+        routes["https://example.test/tool-linux.tar.gz"] = data
+
+    def listed(self, fake_http, tarball, tmp_path) -> str:
+        self.stub_release(fake_http, tarball)
+        return plain_output(
+            run("fetch", "acme/tool", str(tmp_path), "-t", "v1.0.0", "--list")
+        )
+
+    def test_installers_are_not_listed(self, fake_http, tarball, tmp_path) -> None:
+        rendered = self.listed(fake_http, tarball, tmp_path)
+        assert "tool-linux.tar.gz" in rendered
+        assert "tool-windows.msi" not in rendered
+        assert "tool-linux.deb" not in rendered
+
+    def test_the_hidden_ones_are_still_accounted_for(
+        self, fake_http, tarball, tmp_path
+    ) -> None:
+        """Silently dropping three of four assets would look like a bad release."""
+        rendered = self.listed(fake_http, tarball, tmp_path)
+        assert "not shown" in rendered
+        assert "cannot unpack" in rendered
+        assert "checksum files" in rendered
+
+    def test_list_suggests_the_download(self, fake_http, tarball, tmp_path) -> None:
+        rendered = self.listed(fake_http, tarball, tmp_path)
+        assert "wheelbarrow fetch acme/tool" in rendered
+
+    def test_the_suggestion_carries_the_patterns_through(
+        self, fake_http, tarball, tmp_path
+    ) -> None:
+        self.stub_release(fake_http, tarball)
+        rendered = plain_output(
+            run(
+                "fetch",
+                "acme/tool",
+                str(tmp_path),
+                "-t",
+                "v1.0.0",
+                "-p",
+                "*.tar.gz",
+                "--list",
+            )
+        )
+        assert "-p *.tar.gz" in rendered
+
+    def test_a_bare_fetch_downloads_only_the_usable_assets(
+        self, fake_http, tarball, tmp_path
+    ) -> None:
+        """No -p at all means every eligible asset, not every asset."""
+        self.stub_release(fake_http, tarball)
+        result = run("fetch", "acme/tool", str(tmp_path), "-t", "v1.0.0")
+        assert result.exit_code == 0
+        assert (tmp_path / "tool-linux.tar.gz").is_file()
+        assert not (tmp_path / "tool-windows.msi").exists()
+        assert not (tmp_path / "tool-linux.deb").exists()
+
+    def test_asking_for_an_installer_explains_the_refusal(
+        self, fake_http, tarball, tmp_path
+    ) -> None:
+        self.stub_release(fake_http, tarball)
+        result = run("fetch", "acme/tool", str(tmp_path), "-t", "v1.0.0", "-p", "*.msi")
+        assert result.exit_code == 1
+        assert "cannot unpack" in everything_written(result)
 
 
 class TestPublishTakesNoToken:

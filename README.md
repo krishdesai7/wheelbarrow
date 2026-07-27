@@ -40,28 +40,37 @@ Most tools you want to package are published as a GitHub release, so `fetch` get
 and checks them in one step:
 
 ```zsh
-$ wheelbarrow fetch https://github.com/starship/starship/releases/tag/v1.26.0 ~/starship \
-    -p '*-apple-darwin.tar.gz*' -p '*-unknown-linux-musl.tar.gz*'
-starship/starship v1.26.0 -- 6 of 30 assets selected
+$ wheelbarrow fetch https://github.com/starship/starship/releases/tag/v1.26.0 ~/starship
+starship/starship v1.26.0 -- 12 of 30 assets selected
   ok starship-aarch64-apple-darwin.tar.gz (3.9 MiB, the GitHub API)
   ok starship-aarch64-unknown-linux-musl.tar.gz (4.6 MiB, the GitHub API)
   ...
-fetched 6 asset(s) into ~/starship, 6 executable(s) extracted
+fetched 12 asset(s) into ~/starship, 12 executable(s) extracted
+check what they are:
+  wheelbarrow inspect ~/starship
 ```
 
 Every asset is verified before it is unpacked, and each archive lands in a directory
-named after it. See [Fetching release assets](#fetching-release-assets) for the details.
+named after it. Installers and checksum files are skipped, so no `--pattern` is needed for
+the common case. See [Fetching release assets](#fetching-release-assets) for the details.
 
 `build` then takes that whole directory and turns it into one wheel per platform:
 
 ```zsh
 $ wheelbarrow build ~/starship -n py-starship -V 1.26.0
-building 6 wheels from 6 executables in ~/starship
+building 11 wheels from 11 executables in ~/starship
   ok py_starship-1.26.0-py3-none-macosx_11_0_arm64.whl (3.9 MiB)
   ok py_starship-1.26.0-py3-none-manylinux_2_17_aarch64.musllinux_1_2_aarch64.whl (4.6 MiB)
   ...
-built 6 wheels into dist (launcher direct, scripts starship)
+built 11 wheels into dist (launcher direct, scripts starship)
+check what would be uploaded:
+  wheelbarrow publish dist/*.whl --dry-run
 ```
+
+Each command ends by naming the one that usually follows it, so the pipeline is
+discoverable without reading the rest of this file. If `inspect` or `build` meets a binary
+it has no wheel tag for — a FreeBSD build, say — it prints the exact `rm -r` that clears
+the directory, archive included, and the command to re-check afterwards.
 
 Two commands for a whole release. See [Directories of binaries](#directories-of-binaries)
 for what `build` refuses and why.
@@ -103,14 +112,31 @@ and for the larger rate limit; as with the publish token there is deliberately n
 
 ### Selecting assets
 
-`--pattern` is a glob over asset names and may be repeated. Anything matching nothing is
-an error rather than a quiet omission — a pattern that stops matching after an upstream
-rename would otherwise surface much later as a missing wheel. `--list` shows the release's
-assets and exits, which is the fastest way to find the right glob.
+`--pattern` is optional. Left out, you get every asset wheelbarrow could build a wheel
+from, which for a typical release is the whole thing:
 
-Checksum files are never treated as payload, even when a pattern matches them. That is
-what lets `'*.tar.gz*'` — the natural way to ask for the tarballs — do the obvious thing
-rather than trying to unpack a `.sha256` alongside them.
+```zsh
+wheelbarrow fetch <release-url> <dir>
+```
+
+Give one or more `--pattern` globs to narrow that. Anything matching nothing is an error
+rather than a quiet omission — a pattern that stops matching after an upstream rename would
+otherwise surface much later as a missing wheel. `--list` shows what would be downloaded
+and exits.
+
+Two kinds of asset are never treated as payload, even when a pattern matches them:
+
+- **Checksum files**, which is what lets `'*.tar.gz*'` — the natural way to ask for the
+  tarballs — do the obvious thing rather than trying to unpack a `.sha256` alongside them.
+- **Anything that cannot become a wheel**: installers (`.msi`, `.deb`, `.rpm`, `.dmg`, …),
+  signatures and attestations, documentation. wheelbarrow cannot open an installer to get
+  at the executable inside, so listing one and declining it later would just send you
+  looking for a rename that never happened.
+
+`--list` reports how many it left out and why, so a release of nothing but `.msi` files
+reads as "wheelbarrow cannot use these" rather than as an empty release. An asset with no
+extension at all is always kept — a release shipping the bare executable is exactly the
+case `build` wants.
 
 ### Verification
 
@@ -146,9 +172,13 @@ nodes, and drops setuid bits — while keeping the executable bit, the one permi
 has to survive. Zip archives get that bit restored explicitly, since `zipfile` discards
 the stored Unix mode and would otherwise leave a binary unrunnable.
 
-An asset that is not an archive — a bare executable, or an installer like `.msi` — is
-downloaded and verified but not unpacked, which is not an error. `--no-extract` skips
-unpacking entirely.
+An asset that is not an archive — a bare executable, say — is downloaded and verified but
+not unpacked, which is not an error. `--no-extract` skips unpacking entirely.
+
+The count of extracted executables is decided the same way `build` decides it: by parsing
+the headers, never by the executable bit. A zip written on Windows stores DOS attributes
+rather than a Unix mode, so a `.exe` comes out of one with no `+x` — counting the bit would
+report fewer binaries than the very next command goes on to package.
 
 Fetching is not on the build path: `build` itself never reaches the network.
 
@@ -172,7 +202,9 @@ path                                       platform tag
 starship-aarch64-apple-darwin/starship     macosx_11_0_arm64
 starship-aarch64-unknown-linux-musl/...    manylinux_2_17_aarch64.musllinux_1_2_aarch64
 ...
-6 executable(s), 6 other file(s) ignored
+11 executable(s), 11 other file(s) ignored
+build the whole directory:
+  wheelbarrow build ~/starship -n <name> -V <version>
 ```
 
 Every wheel in a batch shares one `--name` and `--version`, so the platform tag is the only
@@ -192,7 +224,19 @@ finished wheels behind that nothing will clean up:
 
 An executable that has no wheel tag at all — a FreeBSD ELF, say — is listed by `inspect`
 with its reason, because reporting is what that command is for. `build` refuses it instead,
-naming every such file at once so that one pass through the directory is enough.
+naming every such file at once so that one pass through the directory is enough. Both then
+print the removal that fixes it:
+
+```
+no tag: starship-x86_64-unknown-freebsd/starship: no wheel platform tag exists for
+freebsd; Python packaging defines tags for Linux, macOS and Windows only.
+remove them with: rm -r ~/starship/starship-x86_64-unknown-freebsd ~/starship/starship-x86_64-unknown-freebsd.tar.gz
+then confirm the directory is clean:
+  wheelbarrow inspect ~/starship
+```
+
+The archive is named alongside the unpacked directory on purpose: leaving it behind means
+the next `fetch` puts the binary straight back.
 
 ## How it works
 
@@ -260,6 +304,22 @@ build.
 ```
 
 The digest is of the file exactly as packaged, so anyone can check it against whatever the tool's own publisher lists. The closing paragraph explains what the wheel tag means in words, which matters most in the two cases where the tag alone misleads: a static binary, whose compressed tag set looks like a typo until you know why both families are named, and a shell script, whose `any` tag promises far more than the script can deliver. That paragraph is only written when the tag and the binary agree — under `--platform-tag` they can contradict each other, and then the README describes the file and stays quiet about the tag.
+
+When a directory is built as a batch, every wheel's README describes the **whole set** instead:
+
+```markdown
+## Provenance
+
+- **`macosx_11_0_arm64`**
+  Mach-O executable, macos/arm64, macOS 11.0+
+  sha256 `01532ebb…`
+- **`manylinux_2_17_x86_64.musllinux_1_2_x86_64`**
+  ELF executable, linux/x86_64, statically linked
+  sha256 `3696a6cf…`
+…
+```
+
+PyPI shows one description for a project and takes it from one of the uploaded files, so a README naming only its own binary would be wrong on that page for everyone who installed a different platform's wheel. Listing the set makes every wheel's README byte-identical, which is what makes PyPI's choice of file not matter. The per-tag explanation is dropped in this mode — each one explains a single tag, and eleven tags do not share an explanation.
 
 ### 3. Asset staging
 
@@ -411,12 +471,14 @@ Wheelbarrow checks for it before asking for confirmation, so a missing token is 
 To publish one package for several platforms, build a wheel per binary and upload them together; installers pick the right one by its platform tag. Point `build` at the directory and it does the whole set at once:
 
 ```zsh
-wheelbarrow fetch <release-url> ~/<tool-name> -p '<glob>'
+wheelbarrow fetch <release-url> ~/<tool-name>
+wheelbarrow inspect ~/<tool-name>
 wheelbarrow build ~/<tool-name> -n <tool-name>-bin -V <version> -o dist
+wheelbarrow publish dist/*.whl --dry-run
 wheelbarrow publish dist/*.whl
 ```
 
-Every wheel in that set shares a name and version, so `dist/*.whl` uploads them in one call. `build` refuses up front if two of them would collide on a tag, which is what makes the glob safe to use.
+Every wheel in that set shares a name and version, so `dist/*.whl` uploads them in one call. `build` refuses up front if two of them would collide on a tag, which is what makes the glob safe to use. The `inspect` step is optional but cheap: it is where an untaggable binary shows up, along with the `rm -r` that clears it, rather than at the point `build` refuses the batch.
 
 ## The launcher
 
