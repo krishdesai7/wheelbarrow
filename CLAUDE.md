@@ -22,6 +22,7 @@ Wheelbarrow wraps a prebuilt native executable in a correctly tagged Python whee
 end to end in `builder.build_package`, and each stage is a separate module that can be used alone:
 
 ```
+discover.collect      -> Discovery       a file, or every executable under a directory
 probe.inspect_binary  -> BinaryInfo      read ELF/Mach-O/PE headers off disk
 tags.platform_tag     -> str             BinaryInfo -> PEP 425 platform tag
 scaffold.make_spec    -> PackageSpec     validate + normalise user metadata
@@ -88,6 +89,32 @@ would otherwise contradict `WHEEL`), mode `0o755` on the embedded binary, and a 
 platform tag, `true` for `any`, and `WHEEL.json` must keep agreeing with `WHEEL` about it.
 Every entry is written at `ZIP_EPOCH`, so identical inputs produce byte-identical wheels — tests
 assert this, so do not introduce real timestamps or non-deterministic ordering.
+
+### A directory is a batch, and a batch is refused before it starts
+
+`discover.collect` is the front door for both `inspect` and `build`, and it keeps the rule
+that nothing is inferred from the host: membership is decided by whether `inspect_binary`
+parses the file, never by the executable bit, which a `.zip` extraction loses and a
+`.tar.gz` never had. The asymmetry to preserve is that an `InspectionError` on a *named*
+file propagates while the same error inside a directory only means "not a binary" — that
+is what lets a directory of archives-beside-executables work untouched.
+
+`Discovery.is_single` is what keeps single-file behaviour byte-identical: it selects the
+detailed `_print_info` view, and in `_plan_builds` it re-raises a tagging failure verbatim
+instead of folding it into the aggregated batch message. Tests depend on both.
+
+Every batch check runs in `_plan_builds`/`refuse_tag_collisions` *before* the first
+`build_package`, because `_place_wheel` catching a collision on wheel five leaves four
+wheels in `-o` that nothing removes. The three refusals are a tag collision between
+differing binaries (identical ones are a reproducible rebuild, so they are exempt),
+binaries whose default aliases disagree (the installed command would vary by platform),
+and `--platform-tag` over more than one input. Tagging failures are collected across the
+whole batch and reported together: a user who must re-run after each complaint gives up
+before the seventh.
+
+`_keep_dir` gives each build its own subdirectory under `--keep-project` when batching,
+since `build_package` does `rmtree` then `copytree` and would otherwise leave only the
+last one.
 
 ### Fetching is one HTTP choke point and two digest sources
 

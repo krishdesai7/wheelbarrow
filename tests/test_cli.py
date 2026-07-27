@@ -6,11 +6,27 @@ import re
 import pytest
 from typer.testing import CliRunner, Result
 
+from wheelbarrow import cli
 from wheelbarrow.cli import app
 from wheelbarrow.pypi import NameStatus
 
+from .conftest import make_elf, make_pe
+
 runner = CliRunner()
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+@pytest.fixture(autouse=True)
+def wide_console(monkeypatch):
+    """Stop rich wrapping messages the assertions below match on.
+
+    The consoles are module-level, so they take their width at import time --
+    80 columns when nothing is a terminal, which is narrow enough to split a
+    file path or an option name across two lines and defeat an `in` check.
+    """
+    monkeypatch.setattr(cli.console, "width", 300)
+    monkeypatch.setattr(cli.err_console, "width", 300)
+
 
 #: Every command the app exposes, `help` included -- it documents itself.
 COMMANDS = ["fetch", "inspect", "build", "publish", "help"]
@@ -186,6 +202,182 @@ class TestScriptSupport:
         )
         assert result.exit_code == 0
         assert "--platform-tag" not in everything_written(result)
+
+
+class TestDirectoryInput:
+    """`inspect` and `build` take a directory of binaries, not just one file."""
+
+    @pytest.fixture
+    def release_dir(self, tmp_path):
+        """Two platforms unpacked beside the archives they came out of."""
+        root = tmp_path / "downloads"
+        for name, data in [
+            ("tool-linux", make_elf(0x3E, interp=None)),
+            ("tool-windows", make_pe(0x8664)),
+        ]:
+            (root / name).mkdir(parents=True)
+            (root / name / "tool").write_bytes(data)
+            (root / f"{name}.tar.gz").write_bytes(b"\x1f\x8b\x08 not a real archive")
+        return root
+
+    def build_dir(self, path, tmp_path, *extra: str) -> Result:
+        return run(
+            "build",
+            str(path),
+            "-n",
+            "demo-bin",
+            "-V",
+            "1.0.0",
+            "-o",
+            str(tmp_path / "dist"),
+            "--no-check-name",
+            *extra,
+        )
+
+    def test_inspect_tabulates_every_binary(self, release_dir) -> None:
+        rendered = plain_output(run("inspect", str(release_dir)))
+        assert "manylinux_2_17_x86_64" in rendered
+        assert "win_amd64" in rendered
+        assert "2 executable(s)" in rendered
+
+    def test_inspect_says_what_it_passed_over(self, release_dir) -> None:
+        """Silence about the archives would look like they had been packaged."""
+        rendered = plain_output(run("inspect", str(release_dir)))
+        assert "2 other file(s) ignored" in rendered
+
+    def test_inspect_reports_an_untaggable_binary_rather_than_aborting(
+        self, release_dir
+    ) -> None:
+        """Reporting is what inspect is for; refusing is build's job."""
+        (release_dir / "bsd").mkdir()
+        (release_dir / "bsd" / "tool").write_bytes(make_elf(0x3E, osabi=0x09))
+        result = run("inspect", str(release_dir))
+        assert result.exit_code == 0
+        rendered = plain_output(result)
+        assert "no tag" in rendered
+        assert "freebsd" in rendered
+        assert "win_amd64" in rendered  # the others are still listed
+
+    def test_a_lone_file_still_prints_the_detailed_view(self, release_dir) -> None:
+        rendered = plain_output(
+            run("inspect", str(release_dir / "tool-linux" / "tool"))
+        )
+        assert "format" in rendered
+        assert "arch" in rendered
+
+    def test_build_produces_one_wheel_per_binary(self, release_dir, tmp_path) -> None:
+        result = self.build_dir(release_dir, tmp_path)
+        assert result.exit_code == 0
+        wheels = sorted(p.name for p in (tmp_path / "dist").glob("*.whl"))
+        assert wheels == [
+            # Static, so it claims both libc families in one compressed set.
+            "demo_bin-1.0.0-py3-none-manylinux_2_17_x86_64.musllinux_1_2_x86_64.whl",
+            "demo_bin-1.0.0-py3-none-win_amd64.whl",
+        ]
+
+    def test_build_reports_each_wheel_and_the_total(
+        self, release_dir, tmp_path
+    ) -> None:
+        written = plain_output(self.build_dir(release_dir, tmp_path))
+        assert "building 2 wheels" in written
+        assert "built 2 wheels" in written
+
+    def test_build_refuses_an_untaggable_binary_naming_it(
+        self, release_dir, tmp_path
+    ) -> None:
+        (release_dir / "bsd").mkdir()
+        (release_dir / "bsd" / "tool").write_bytes(make_elf(0x3E, osabi=0x09))
+        result = self.build_dir(release_dir, tmp_path)
+        assert result.exit_code == 1
+        written = everything_written(result)
+        assert "bsd" in written
+        assert not (tmp_path / "dist").exists()
+
+    def test_every_untaggable_binary_is_named_at_once(
+        self, release_dir, tmp_path
+    ) -> None:
+        """One re-run should be enough to fix the directory, not one per file."""
+        for name in ("bsd", "netbsd"):
+            (release_dir / name).mkdir()
+            (release_dir / name / "tool").write_bytes(make_elf(0x3E, osabi=0x09))
+        written = everything_written(self.build_dir(release_dir, tmp_path))
+        assert "/bsd/" in written
+        assert "/netbsd/" in written
+
+    def test_an_explicit_platform_tag_cannot_cover_a_directory(
+        self, release_dir, tmp_path
+    ) -> None:
+        """One tag over many binaries means they all overwrite one another."""
+        result = self.build_dir(
+            release_dir, tmp_path, "--platform-tag", "manylinux_2_17_x86_64"
+        )
+        assert result.exit_code == 1
+        # The distinctive phrase: a tag collision would also name the option.
+        assert "names one tag" in everything_written(result)
+        assert not (tmp_path / "dist").exists()
+
+    def test_it_still_works_on_a_single_file(self, release_dir, tmp_path) -> None:
+        """--platform-tag is only refused for a directory of several."""
+        result = self.build_dir(
+            release_dir / "tool-linux" / "tool",
+            tmp_path,
+            "--platform-tag",
+            "manylinux_2_28_x86_64",
+        )
+        assert result.exit_code == 0
+        assert (
+            tmp_path / "dist" / "demo_bin-1.0.0-py3-none-manylinux_2_28_x86_64.whl"
+        ).is_file()
+
+    def test_binaries_of_differing_names_are_refused(self, tmp_path) -> None:
+        """Otherwise the installed command would change with the platform."""
+        root = tmp_path / "mixed"
+        root.mkdir()
+        (root / "tool-linux").write_bytes(make_elf(0x3E, interp=None))
+        (root / "tool.exe").write_bytes(make_pe(0x8664))
+        result = self.build_dir(root, tmp_path)
+        assert result.exit_code == 1
+        written = everything_written(result)
+        assert "--alias" in written
+        assert not (tmp_path / "dist").exists()
+
+    def test_an_explicit_alias_settles_it(self, tmp_path) -> None:
+        root = tmp_path / "mixed"
+        root.mkdir()
+        (root / "tool-linux").write_bytes(make_elf(0x3E, interp=None))
+        (root / "tool.exe").write_bytes(make_pe(0x8664))
+        result = self.build_dir(root, tmp_path, "-a", "tool")
+        assert result.exit_code == 0
+        assert len(list((tmp_path / "dist").glob("*.whl"))) == 2
+
+    def test_the_name_is_looked_up_once_for_the_whole_batch(
+        self, release_dir, tmp_path, monkeypatch
+    ) -> None:
+        """Every wheel carries the same project name; one question suffices."""
+        calls: list[str] = []
+        monkeypatch.setattr(
+            "wheelbarrow.pypi.check_name",
+            lambda name, **_kw: calls.append(name) or NameStatus.AVAILABLE,
+        )
+        result = run(
+            "build",
+            str(release_dir),
+            "-n",
+            "demo-bin",
+            "-V",
+            "1.0.0",
+            "-o",
+            str(tmp_path / "dist"),
+        )
+        assert result.exit_code == 0
+        assert calls == ["demo-bin"]
+
+    def test_a_directory_with_nothing_in_it_is_an_error(self, tmp_path) -> None:
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        result = run("inspect", str(empty))
+        assert result.exit_code == 1
+        assert "no executable" in everything_written(result)
 
 
 class TestFetchCommand:

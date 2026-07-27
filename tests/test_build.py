@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from wheelbarrow.builder import BuildResult, build_package
+from wheelbarrow.builder import BuildResult, build_package, build_packages
 from wheelbarrow.errors import BuildError
 from wheelbarrow.probe import BinaryInfo, inspect_binary
 from wheelbarrow.scaffold import (
@@ -382,6 +382,127 @@ class TestCompressedTagSets:
         with zipfile.ZipFile(built.wheel) as zf:
             assert zf.testzip() is None
             assert archive_executables(built.spec) <= set(zf.namelist())
+
+
+class TestBatchBuilds:
+    """`build_packages` builds a directory's worth of binaries in one pass."""
+
+    def plan(self, binary: Path, **overrides) -> tuple[Path, PackageSpec]:
+        info: BinaryInfo = inspect_binary(binary)
+        return binary, make_spec(
+            name=overrides.pop("name", "demo-bin"),
+            version=overrides.pop("version", "1.2.3"),
+            binary_name=binary.name,
+            platform_tag=overrides.pop("platform_tag", None) or platform_tag(info),
+            **overrides,
+        )
+
+    @pytest.fixture
+    def two_platforms(self, write_binary) -> list[tuple[Path, PackageSpec]]:
+        return [
+            self.plan(write_binary("linux/tool", make_elf(0x3E, interp=None))),
+            self.plan(write_binary("windows/tool", make_pe(0x8664))),
+        ]
+
+    def test_one_wheel_per_binary(self, two_platforms, tmp_path) -> None:
+        results = build_packages(two_platforms, tmp_path / "dist")
+        assert len(results) == 2
+        assert len(list((tmp_path / "dist").glob("*.whl"))) == 2
+
+    def test_they_differ_only_in_platform_tag(self, two_platforms, tmp_path) -> None:
+        results = build_packages(two_platforms, tmp_path / "dist")
+        tags = {r.tag for r in results}
+        assert len(tags) == 2
+        assert {r.spec.dist_name for r in results} == {"demo-bin"}
+        assert {r.spec.version for r in results} == {"1.2.3"}
+
+    def test_each_result_is_reported_as_it_lands(self, two_platforms, tmp_path) -> None:
+        """A long batch must not be silent while it works."""
+        seen: list[str] = []
+        build_packages(
+            two_platforms, tmp_path / "dist", on_built=lambda r: seen.append(r.tag)
+        )
+        assert len(seen) == 2
+
+    def test_a_batch_wheel_matches_the_same_build_done_alone(
+        self, two_platforms, tmp_path
+    ) -> None:
+        """Batching must be a loop, not a different code path."""
+        batched = build_packages(two_platforms, tmp_path / "batch")
+        binary, spec = two_platforms[0]
+        alone = build_package(binary, spec, tmp_path / "alone")
+        assert alone.wheel.read_bytes() == batched[0].wheel.read_bytes()
+
+    def test_kept_projects_do_not_overwrite_each_other(
+        self, two_platforms, tmp_path
+    ) -> None:
+        """One --keep-project directory, so each build needs its own subtree."""
+        build_packages(
+            two_platforms, tmp_path / "dist", keep_project=tmp_path / "projects"
+        )
+        kept = sorted(p.name for p in (tmp_path / "projects").iterdir())
+        assert len(kept) == 2
+        assert all(
+            (tmp_path / "projects" / k / "pyproject.toml").is_file() for k in kept
+        )
+
+    def test_a_single_plan_keeps_the_project_where_asked(
+        self, two_platforms, tmp_path
+    ) -> None:
+        """One binary means no subdirectory, exactly as before."""
+        build_packages(
+            two_platforms[:1], tmp_path / "dist", keep_project=tmp_path / "project"
+        )
+        assert (tmp_path / "project" / "pyproject.toml").is_file()
+
+
+class TestBatchTagCollisions:
+    """Two binaries claiming one wheel name is refused before anything runs."""
+
+    def plan(self, binary: Path) -> tuple[Path, PackageSpec]:
+        return binary, make_spec(
+            name="demo-bin",
+            version="1.2.3",
+            binary_name=binary.name,
+            platform_tag=platform_tag(inspect_binary(binary)),
+        )
+
+    @pytest.fixture
+    def clashing(self, write_binary) -> list[tuple[Path, PackageSpec]]:
+        """Two different binaries that resolve to the same platform tag."""
+        return [
+            self.plan(write_binary("a/tool", make_elf(0x3E, interp=None))),
+            self.plan(write_binary("b/tool", make_elf(0x3E, interp=None) + b"\x00")),
+        ]
+
+    def test_the_batch_is_refused(self, clashing, tmp_path) -> None:
+        with pytest.raises(BuildError, match="same platform tag"):
+            build_packages(clashing, tmp_path / "dist")
+
+    def test_both_paths_are_named(self, clashing, tmp_path) -> None:
+        with pytest.raises(BuildError) as excinfo:
+            build_packages(clashing, tmp_path / "dist")
+        assert str(clashing[0][0]) in str(excinfo.value)
+        assert str(clashing[1][0]) in str(excinfo.value)
+
+    def test_nothing_is_built_before_the_refusal(self, clashing, tmp_path) -> None:
+        """The whole point of a batch is that nobody is watching each wheel."""
+        with pytest.raises(BuildError):
+            build_packages(clashing, tmp_path / "dist")
+        assert not (tmp_path / "dist").exists()
+
+    def test_identical_binaries_are_a_rebuild_not_a_clash(
+        self, write_binary, tmp_path
+    ) -> None:
+        """Builds are reproducible, so a duplicate input loses nothing."""
+        data = make_elf(0x3E, interp=None)
+        plans = [
+            self.plan(write_binary("a/tool", data)),
+            self.plan(write_binary("b/tool", data)),
+        ]
+        results = build_packages(plans, tmp_path / "dist")
+        assert len(results) == 2
+        assert len(list((tmp_path / "dist").glob("*.whl"))) == 1
 
 
 class TestReproducibility:

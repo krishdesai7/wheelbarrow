@@ -327,38 +327,36 @@ def _print_inventory(
 ) -> None:
     """Tabulate a directory's executables, one row per binary.
 
-    An untaggable binary is shown with its reason rather than aborting the
-    listing: reporting is what this command is for, and refusing it is `build`'s
-    job.
+    The platform tag is shown without its `py3-none-` prefix: that part is the
+    same on every row, and it is the platform half that has to differ for the
+    wheels to coexist. An untaggable binary is listed with its reason below
+    rather than aborting -- reporting is what this command is for, and refusing
+    is `build`'s job.
     """
     table = Table(box=None, pad_edge=False)
-    table.add_column("path")
-    table.add_column("format", style="dim")
-    table.add_column("os/arch", style="dim")
-    table.add_column("wheel tag", style="bold green")
+    table.add_column("path", overflow="fold")
+    table.add_column("platform tag", style="bold green", overflow="fold")
 
-    untaggable = 0
+    reasons: list[str] = []
     for candidate in found.candidates:
+        relative: str = str(candidate.path.relative_to(root))
         try:
-            tag: str = full_tag(platform_tag(candidate.info, glibc_version=glibc))
+            tag: str = platform_tag(candidate.info, glibc_version=glibc)
         except WheelbarrowError as exc:
-            untaggable += 1
-            tag = f"[yellow]no tag[/] [dim]({exc})[/]"
-        info: BinaryInfo = candidate.info
-        table.add_row(
-            str(candidate.path.relative_to(root)),
-            info.format,
-            f"{info.os}/{info.arch}",
-            tag,
-        )
+            tag = "[yellow]-[/]"
+            reasons.append(f"{relative}: {exc}")
+        # os and arch are left out: they are already spelled out by the tag,
+        # and the compound tags are long enough to need the room.
+        table.add_row(relative, tag)
 
     console.print(table)
+
     summary: str = f"{len(found.candidates)} executable(s)"
     if found.skipped:
         summary += f", {len(found.skipped)} other file(s) ignored"
-    if untaggable:
-        summary += f", {untaggable} with no wheel tag"
     console.print(f"[dim]{summary}[/]")
+    for reason in reasons:
+        console.print(f"[yellow]no tag:[/] {reason}")
 
 
 def _print_info(info: BinaryInfo, tag: str) -> None:

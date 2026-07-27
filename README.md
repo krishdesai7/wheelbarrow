@@ -50,10 +50,23 @@ fetched 6 asset(s) into ~/starship, 6 executable(s) extracted
 ```
 
 Every asset is verified before it is unpacked, and each archive lands in a directory
-named after it, so the executables are ready to hand to `build`. See
-[Fetching release assets](#fetching-release-assets) for the details.
+named after it. See [Fetching release assets](#fetching-release-assets) for the details.
 
-Once installed you can run Wheelbarrow from the command line:
+`build` then takes that whole directory and turns it into one wheel per platform:
+
+```zsh
+$ wheelbarrow build ~/starship -n py-starship -V 1.26.0
+building 6 wheels from 6 executables in ~/starship
+  ok py_starship-1.26.0-py3-none-macosx_11_0_arm64.whl (3.9 MiB)
+  ok py_starship-1.26.0-py3-none-manylinux_2_17_aarch64.musllinux_1_2_aarch64.whl (4.6 MiB)
+  ...
+built 6 wheels into dist (launcher direct, scripts starship)
+```
+
+Two commands for a whole release. See [Directories of binaries](#directories-of-binaries)
+for what `build` refuses and why.
+
+A single binary works exactly as before, with a more detailed report:
 
 ```zsh
 $ wheelbarrow build ./<binary> --name <tool-name> --version <version> --alias <alias>
@@ -138,6 +151,48 @@ downloaded and verified but not unpacked, which is not an error. `--no-extract` 
 unpacking entirely.
 
 Fetching is not on the build path: `build` itself never reaches the network.
+
+## Directories of binaries
+
+`inspect` and `build` both accept a directory as readily as a file. What they find in it is
+decided by reading headers, not by asking the file system what looks runnable — a binary
+extracted from a `.zip` may have lost its mode bits, and the `.tar.gz` it came out of is
+mode 0644 either way. So a directory that still holds the archives beside the executables,
+which is exactly what `fetch` leaves, needs no tidying first.
+
+A failure to read a file means different things in the two cases. A file you named must be
+readable: refusing to parse it answers the question you asked. The same failure inside a
+directory just means "not a binary", which is the common case rather than an error —
+`inspect` says how many files it passed over so that silence is never mistaken for
+success.
+
+```zsh
+$ wheelbarrow inspect ~/starship
+path                                       platform tag
+starship-aarch64-apple-darwin/starship     macosx_11_0_arm64
+starship-aarch64-unknown-linux-musl/...    manylinux_2_17_aarch64.musllinux_1_2_aarch64
+...
+6 executable(s), 6 other file(s) ignored
+```
+
+Every wheel in a batch shares one `--name` and `--version`, so the platform tag is the only
+thing keeping them apart. That makes three situations worth refusing outright, all of them
+checked before a single wheel is built — a batch that fails half way through leaves
+finished wheels behind that nothing will clean up:
+
+- **Two binaries resolving to one tag.** They would overwrite each other in the output
+  directory, and the survivor gives no hint that anything was lost. A dynamically linked
+  glibc build sitting next to a static build of the same architecture is the usual cause.
+  Identical inputs are exempt: builds are reproducible, so a duplicate is a rebuild.
+- **Binaries with different file names.** The console script defaults to the file name, so
+  a directory of `tool-linux` and `tool-darwin` would produce one package whose command
+  changes depending on which platform it was installed on. Pass `--alias` to settle it.
+- **`--platform-tag` over more than one binary.** One tag cannot describe several, and
+  applying it to all of them collapses them onto one wheel name.
+
+An executable that has no wheel tag at all — a FreeBSD ELF, say — is listed by `inspect`
+with its reason, because reporting is what that command is for. `build` refuses it instead,
+naming every such file at once so that one pass through the directory is enough.
 
 ## How it works
 
@@ -383,9 +438,9 @@ wheelbarrow fetch SOURCE [DIR]         token comes from $GH_TOKEN or $GITHUB_TOK
         --allow-unverified    download assets that publish no checksum
         --timeout SECONDS     per-request timeout (default: 30)
 
-wheelbarrow inspect BINARY [--glibc VERSION]
+wheelbarrow inspect PATH [--glibc VERSION]      an executable, or a directory of them
 
-wheelbarrow build BINARY --name NAME --version VERSION
+wheelbarrow build PATH --name NAME --version VERSION
     -a, --alias NAME          console script to expose (repeatable)
     -o, --output DIR          output directory (default: dist)
     -d, --description TEXT
@@ -421,7 +476,8 @@ Running a command with no arguments at all prints its help, so `wheelbarrow buil
 
 - Wheelbarrow only repackages binaries. It never compiles or modifies them.
 - Dynamically linked Linux binaries are tagged `manylinux_2_17` by default. That is a claim about glibc compatibility that Wheelbarrow cannot verify. If the binary needs a newer glibc version, pass `--glibc`. Statically linked binaries, the most common case for Rust and Go tools, are unaffected.
-- One wheel carries one binary for one platform. Tools that need companion files (man pages, completions, shared libraries) are out of scope.
+- One wheel carries one binary for one platform. Tools that need companion files (man pages, completions, shared libraries) are out of scope. Building a directory produces one such wheel per binary; it does not combine them.
+- Symlinks are skipped when walking a directory, so a link beside its target is not packaged a second time under the link's name.
 - Generated projects use the `uv_build` backend, which is pinned to a narrow range (`>=0.11.30,<0.12`). A project kept with `--keep-project` and rebuilt much later may need that pin refreshed.
 - In `direct` mode each alias is a separate copy of the binary in the wheel. Wheelbarrow warns when more than one alias is requested.
 - Check the upstream licence before republishing someone else's binary.
