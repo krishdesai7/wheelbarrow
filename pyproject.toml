@@ -26,7 +26,7 @@ dependencies = [
 [project.scripts]
 wheelforge = "wheelforge.cli:app"
 
-[build-backend]
+[tool.uv.build-backend]
 editable-profile = "dev"
 module-name = "wheelforge"
 
