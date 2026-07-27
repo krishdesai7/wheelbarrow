@@ -7,7 +7,7 @@ build-backend = "uv_build"
 name = "wheelforge"
 description = "Convert OS binaries into PyPI-installable python wheels"
 readme = "README.md"
-version = "0.1.0"
+version = "1.0.0"
 requires-python = ">=3.14"
 authors = [{ name = "Krish Desai", email = "krish@desai.ml" }]
 keywords = []
