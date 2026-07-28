@@ -629,6 +629,23 @@ $ uv audit
 $ uv run pytest -q
 ```
 
+### Releasing
+
+Cutting a release is two GitHub Actions runs, not a local `uv build`/`uv publish`:
+
+1. Run the **Prepare release** workflow (`workflow_dispatch`, from the Actions tab or `gh workflow run "Prepare release"`). It runs [rooster](https://github.com/astral-sh/rooster) to bump the version in `pyproject.toml` and update `CHANGELOG.md` from merged pull requests since the last tag, then opens a PR with the result. Review and merge it.
+2. Tag the merged commit and push the tag:
+
+   ```zsh
+   git checkout main && git pull
+   git tag <version>
+   git push origin <version>
+   ```
+
+   Pushing the tag triggers the **Release** workflow, which builds, publishes to PyPI via [trusted publishing](https://docs.pypi.org/trusted-publishers/), and creates the matching GitHub release.
+
+Rooster reads its changelog entries from merged PRs, not raw commits — a change pushed straight to `main` has no PR to summarize, so land changes through a PR (even a solo one) rather than pushing directly, or `Prepare release` will find nothing to bump.
+
 ## Licence
 
 MIT OR Apache-2.0
