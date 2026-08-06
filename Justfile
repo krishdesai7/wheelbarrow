@@ -15,9 +15,9 @@ mutable:
 alias i := immutable
 immutable:
     uv sync --frozen
-    uv run pyrefly check
+    uv run --frozen pyrefly check
     uv format --diff
-    uv run ruff check
+    uv run --frozen ruff check
     uv audit
-    uv run complexipy --suggest-refactors
-    uv run pytest -q
+    uv run --frozen complexipy --suggest-refactors
+    uv run --frozen pytest -q
