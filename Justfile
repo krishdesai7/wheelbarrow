@@ -19,4 +19,5 @@ immutable:
     uv format --diff
     uv run ruff check
     uv audit
+    uv run complexipy --suggest-refactors
     uv run pytest -q
